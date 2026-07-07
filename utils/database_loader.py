@@ -256,3 +256,35 @@ def database_status_summary():
         },
 
     }
+
+# ==========================================================
+# Proposed Design Helpers
+# ==========================================================
+
+def get_building_classes():
+    """
+    Return the available NCC building classes.
+    """
+
+    df = load_standards_database()["building_class"]
+
+    if df.empty:
+        return []
+
+    first_col = df.columns[0]
+
+    return (
+        df[first_col]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+
+def get_standards_list():
+    """
+    Return the Standards List worksheet.
+    """
+
+    return load_standards_database()["standards_list"]
