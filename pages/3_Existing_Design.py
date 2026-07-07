@@ -15,6 +15,7 @@ from utils.calculations import (
 )
 
 
+
 from utils.charts import (
     create_apparatus_pie_chart,
     create_lifecycle_bar_chart,
