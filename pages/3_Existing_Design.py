@@ -302,9 +302,15 @@ with st.container(key=csv_key):
                     "column and a 'Quantity' column."
                 )
             else:
-                st.session_state.csv_upload_df = csv_df[
-                    ["Fire Safety System", "Quantity"]
-                ]
+                csv_df = csv_df[["Fire Safety System", "Quantity"]]
+
+                csv_df = (
+                    csv_df
+                    .groupby("Fire Safety System", as_index=False)["Quantity"]
+                    .sum()
+                )
+
+                st.session_state.csv_upload_df = csv_df
 
         except Exception as e:
             st.error(f"Could not read CSV file: {e}")
