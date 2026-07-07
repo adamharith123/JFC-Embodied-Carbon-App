@@ -4,3 +4,4 @@ pandas
 openpyxl
 plotly
 xlsxwriter
+qrcode[pil]>=7.4

@@ -1,25 +1,37 @@
 @echo off
-title Launching Streamlit App
+setlocal
 
-echo ----------------------------------------
-echo Initializing Anaconda Environment...
-echo ----------------------------------------
+set ENV_NAME=JFC-Embodied-Carbon-App
 
-:: 1. Initialize Conda for Windows Command Prompt
-call "%USERPROFILE%\anaconda3\Scripts\activate.bat"
-if errorlevel 1 call "%USERPROFILE%\miniconda3\Scripts\activate.bat"
-if errorlevel 1 call "%ProgramData%\anaconda3\Scripts\activate.bat"
+REM Move to this script's own folder so relative paths (data\, utils\) resolve correctly
+cd /d "%~dp0"
 
-echo Launching Streamlit App...
-echo Share your Local IP with people on your Wi-Fi!
-echo ----------------------------------------
-
-:: 2. Run Streamlit directly inside the custom environment
-conda run -n JFC-Embodied-Carbon-App --no-capture-output streamlit run app.py --server.address=0.0.0.0 --server.port=8501
-
-:: 3. Keep window open if it fails so users can see errors
+REM Check the environment exists
+conda env list | findstr /C:"%ENV_NAME%" >nul
 if errorlevel 1 (
+    echo ERROR: Conda environment "%ENV_NAME%" was not found.
     echo.
-    echo Streamlit failed to start or crashed.
+    echo Create it first with:
+    echo   conda create -n %ENV_NAME% python=3.11
+    echo   conda activate %ENV_NAME%
+    echo   pip install -r requirements.txt
     pause
+    exit /b 1
 )
+
+call conda activate %ENV_NAME%
+
+REM Verify Streamlit is actually installed in this environment
+python -c "import streamlit" 2>nul
+if errorlevel 1 (
+    echo ERROR: Streamlit is not installed in "%ENV_NAME%".
+    echo Run: pip install -r requirements.txt
+    pause
+    exit /b 1
+)
+
+echo Environment "%ENV_NAME%" verified. Launching app...
+
+streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+
+pause
