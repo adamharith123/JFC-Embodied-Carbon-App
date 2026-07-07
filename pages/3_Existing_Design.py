@@ -31,6 +31,19 @@ st.set_page_config(
 
 apply_global_styles()
 
+st.markdown(
+    """
+    <style>
+    .st-key-manual_table_disabled,
+    .st-key-csv_upload_disabled {
+        opacity: 0.4;
+        pointer-events: none;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 render_header(
     "Existing Design",
     APP_SUBTITLE,
@@ -66,6 +79,20 @@ if "existing_results_df" not in st.session_state:
 
 if "existing_summary" not in st.session_state:
     st.session_state.existing_summary = {}
+
+if "use_manual_table" not in st.session_state:
+    st.session_state.use_manual_table = True
+
+if "use_csv_upload" not in st.session_state:
+    st.session_state.use_csv_upload = False
+
+if "csv_upload_df" not in st.session_state:
+    st.session_state.csv_upload_df = pd.DataFrame(
+        columns=["Fire Safety System", "Quantity"]
+    )
+
+if "show_csv_preview" not in st.session_state:
+    st.session_state.show_csv_preview = False
 
 # ==========================================================
 # Page Introduction
@@ -171,31 +198,126 @@ if add_system:
 # ==========================================================
 
 st.divider()
-
 st.subheader("Current Systems")
 
-edited_df = st.data_editor(
-    st.session_state.existing_design_df,
-    use_container_width=True,
-    hide_index=True,
-    num_rows="dynamic",  # lets users add/delete rows directly in the table
-    column_config={
-        "Fire Safety System": st.column_config.SelectboxColumn(
-            "Fire Safety System",
-            options=fire_systems,
-            required=True,
-        ),
-        "Quantity": st.column_config.NumberColumn(
-            "Quantity",
-            min_value=1,
-            step=1,
-            required=True,
-        ),
-    },
-    key="existing_design_editor",
+toggle_col, _ = st.columns([1, 5])
+
+with toggle_col:
+    st.session_state.use_manual_table = st.checkbox(
+        "In use",
+        value=st.session_state.use_manual_table,
+        key="manual_table_toggle",
+    )
+
+table_key = (
+    "manual_table_active"
+    if st.session_state.use_manual_table
+    else "manual_table_disabled"
 )
 
-st.session_state.existing_design_df = edited_df
+with st.container(key=table_key):
+
+    edited_df = st.data_editor(
+        st.session_state.existing_design_df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        disabled=not st.session_state.use_manual_table,
+        column_config={
+            "Fire Safety System": st.column_config.SelectboxColumn(
+                "Fire Safety System",
+                options=fire_systems,
+                required=True,
+            ),
+            "Quantity": st.column_config.NumberColumn(
+                "Quantity",
+                min_value=1,
+                step=1,
+                required=True,
+            ),
+        },
+        key="existing_design_editor",
+    )
+
+    st.session_state.existing_design_df = edited_df
+
+
+st.divider()
+st.subheader("Upload Existing Systems (CSV)")
+
+toggle_col2, _ = st.columns([1, 5])
+
+with toggle_col2:
+    st.session_state.use_csv_upload = st.checkbox(
+        "In use",
+        value=st.session_state.use_csv_upload,
+        key="csv_upload_toggle",
+    )
+
+csv_key = (
+    "csv_upload_active"
+    if st.session_state.use_csv_upload
+    else "csv_upload_disabled"
+)
+
+with st.container(key=csv_key):
+
+    upload_col, button_col = st.columns([4, 1])
+
+    with upload_col:
+        uploaded_file = st.file_uploader(
+            "Upload CSV (columns: Apparatus, Quantity)",
+            type=["csv"],
+            disabled=not st.session_state.use_csv_upload,
+            key="csv_uploader",
+        )
+
+    with button_col:
+        st.write("")
+        st.write("")
+        preview_csv = st.button(
+            "Preview CSV",
+            use_container_width=True,
+            disabled=not st.session_state.use_csv_upload,
+        )
+
+    if uploaded_file is not None:
+
+        try:
+            csv_df = pd.read_csv(uploaded_file)
+            csv_df.columns = [c.strip() for c in csv_df.columns]
+
+            rename_map = {}
+            for col in csv_df.columns:
+                if col.lower() in ("apparatus", "fire safety system", "system"):
+                    rename_map[col] = "Fire Safety System"
+                elif col.lower() in ("quantity", "qty"):
+                    rename_map[col] = "Quantity"
+
+            csv_df = csv_df.rename(columns=rename_map)
+
+            if "Fire Safety System" not in csv_df.columns or "Quantity" not in csv_df.columns:
+                st.error(
+                    "CSV must contain an 'Apparatus' (or 'Fire Safety System') "
+                    "column and a 'Quantity' column."
+                )
+            else:
+                st.session_state.csv_upload_df = csv_df[
+                    ["Fire Safety System", "Quantity"]
+                ]
+
+        except Exception as e:
+            st.error(f"Could not read CSV file: {e}")
+
+    if preview_csv:
+        st.session_state.show_csv_preview = not st.session_state.show_csv_preview
+
+    if st.session_state.show_csv_preview and not st.session_state.csv_upload_df.empty:
+        st.dataframe(
+            st.session_state.csv_upload_df,
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # ==========================================================
 # Calculate
@@ -214,37 +336,50 @@ calculate = st.button(
 
 if calculate:
 
-    # Group duplicate systems and sum their quantities before calculating
-    grouped_df = (
-        st.session_state.existing_design_df
-        .groupby("Fire Safety System", as_index=False)["Quantity"]
-        .sum()
-    )
+    sources = []
 
-    # Check for any systems that won't match the Carbon Database
-    apparatus_names = carbon_db["apparatus_output"]["Apparatus"]
+    if st.session_state.use_manual_table and not st.session_state.existing_design_df.empty:
+        sources.append(st.session_state.existing_design_df)
 
-    unmatched = grouped_df[
-        ~grouped_df["Fire Safety System"].isin(apparatus_names)
-    ]
+    if st.session_state.use_csv_upload and not st.session_state.csv_upload_df.empty:
+        sources.append(st.session_state.csv_upload_df)
 
-    if not unmatched.empty:
+    if not sources:
         st.warning(
-            "The following systems were not found in the Carbon Database "
-            "and will be excluded from the results: "
-            + ", ".join(unmatched["Fire Safety System"].tolist())
+            "No active data source contains any systems. Enable a source "
+            "and add data before calculating."
+        )
+    else:
+        combined_df = pd.concat(sources, ignore_index=True)
+
+        grouped_df = (
+            combined_df
+            .groupby("Fire Safety System", as_index=False)["Quantity"]
+            .sum()
         )
 
-    results_df = calculate_existing_design(
-        grouped_df,
-        carbon_db["apparatus_output"],
-    )
+        apparatus_names = carbon_db["apparatus_output"]["Apparatus"]
 
-    summary = summarise_results(results_df)
+        unmatched = grouped_df[
+            ~grouped_df["Fire Safety System"].isin(apparatus_names)
+        ]
 
-    st.session_state.existing_results_df = results_df
-    st.session_state.existing_summary = summary
-    
+        if not unmatched.empty:
+            st.warning(
+                "The following systems were not found in the Carbon Database "
+                "and will be excluded from the results: "
+                + ", ".join(unmatched["Fire Safety System"].tolist())
+            )
+
+        results_df = calculate_existing_design(
+            grouped_df,
+            carbon_db["apparatus_output"],
+        )
+
+        summary = summarise_results(results_df)
+
+        st.session_state.existing_results_df = results_df
+        st.session_state.existing_summary = summary
 
 # ==========================================================
 # Results
