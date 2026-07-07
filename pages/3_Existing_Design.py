@@ -14,10 +14,12 @@ from utils.calculations import (
     summarise_results,
 )
 
+
 from utils.charts import (
     create_apparatus_pie_chart,
     create_lifecycle_bar_chart,
 )
+1
 
 # ==========================================================
 # Page Configuration
