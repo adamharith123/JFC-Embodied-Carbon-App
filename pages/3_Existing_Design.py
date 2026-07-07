@@ -143,22 +143,28 @@ with right:
 
 if add_system:
 
-    new_row = pd.DataFrame(
-        [
-            {
-                "Fire Safety System": system,
-                "Quantity": quantity,
-            }
-        ]
-    )
+    df = st.session_state.existing_design_df
 
-    st.session_state.existing_design_df = pd.concat(
-        [
-            st.session_state.existing_design_df,
-            new_row,
-        ],
-        ignore_index=True,
-    )
+    existing_mask = df["Fire Safety System"] == system
+
+    if existing_mask.any():
+        df.loc[existing_mask, "Quantity"] += quantity
+    else:
+        new_row = pd.DataFrame(
+            [
+                {
+                    "Fire Safety System": system,
+                    "Quantity": quantity,
+                }
+            ]
+        )
+
+        df = pd.concat(
+            [df, new_row],
+            ignore_index=True,
+        )
+
+    st.session_state.existing_design_df = df
 
 # ==========================================================
 # Current Systems
@@ -168,11 +174,32 @@ st.divider()
 
 st.subheader("Current Systems")
 
-st.dataframe(
+edited_df = st.data_editor(
     st.session_state.existing_design_df,
     use_container_width=True,
     hide_index=True,
+    num_rows="dynamic",  # lets users add/delete rows directly in the table
+    column_config={
+        "Fire Safety System": st.column_config.SelectboxColumn(
+            "Fire Safety System",
+            options=fire_systems,
+            required=True,
+        ),
+        "Quantity": st.column_config.NumberColumn(
+            "Quantity",
+            min_value=1,
+            step=1,
+            required=True,
+        ),
+    },
+    key="existing_design_editor",
 )
+
+st.session_state.existing_design_df = edited_df
+
+# ==========================================================
+# Calculate
+# ==========================================================
 
 # ==========================================================
 # Calculate
@@ -187,8 +214,29 @@ calculate = st.button(
 
 if calculate:
 
+    # Group duplicate systems and sum their quantities before calculating
+    grouped_df = (
+        st.session_state.existing_design_df
+        .groupby("Fire Safety System", as_index=False)["Quantity"]
+        .sum()
+    )
+
+    # Check for any systems that won't match the Carbon Database
+    apparatus_names = carbon_db["apparatus_output"]["Apparatus"]
+
+    unmatched = grouped_df[
+        ~grouped_df["Fire Safety System"].isin(apparatus_names)
+    ]
+
+    if not unmatched.empty:
+        st.warning(
+            "The following systems were not found in the Carbon Database "
+            "and will be excluded from the results: "
+            + ", ".join(unmatched["Fire Safety System"].tolist())
+        )
+
     results_df = calculate_existing_design(
-        st.session_state.existing_design_df,
+        grouped_df,
         carbon_db["apparatus_output"],
     )
 
@@ -196,6 +244,7 @@ if calculate:
 
     st.session_state.existing_results_df = results_df
     st.session_state.existing_summary = summary
+    
 
 # ==========================================================
 # Results
