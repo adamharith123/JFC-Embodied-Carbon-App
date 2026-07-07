@@ -8,6 +8,13 @@ from utils.styles import (
     render_footer,
 )
 
+from utils.project_store import (
+    get_project_names,
+    get_project_meta,
+    get_next_version_number,
+    save_project_version,
+)
+
 from utils.database_loader import load_carbon_database
 from utils.calculations import (
     calculate_existing_design,
@@ -113,24 +120,75 @@ The available systems are loaded directly from the Carbon Database.
 
 st.subheader("Project Information")
 
-col1, col2 = st.columns(2)
+project_mode = st.radio(
+    "Project Type",
+    ["New Project", "Existing Project"],
+    horizontal=True,
+    key="project_mode",
+)
 
-with col1:
-    project_name = st.text_input(
-        "Project Name",
-        placeholder="Example: ABC Office Fitout",
+if project_mode == "New Project":
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        project_name = st.text_input(
+            "Project Name",
+            placeholder="Example: ABC Office Fitout",
+        )
+
+    with col2:
+        building_area = st.number_input(
+            "Building Area (m²)",
+            min_value=0.0,
+            step=1.0,
+        )
+
+    assessment_notes = st.text_area(
+        "Assessment Notes",
+        placeholder="Optional project notes...",
     )
 
-with col2:
-    building_area = st.number_input(
-        "Building Area (m²)",
-        min_value=0.0,
-        step=1.0,
+    next_version = 1
+
+else:
+
+    existing_projects = get_project_names()
+
+    if not existing_projects:
+        st.info("No existing projects found yet. Create a New Project first.")
+        st.stop()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        project_name = st.selectbox(
+            "Select Project",
+            existing_projects,
+        )
+
+    project_meta = get_project_meta(project_name)
+
+    with col2:
+        building_area = st.number_input(
+            "Building Area (m²)",
+            min_value=0.0,
+            step=1.0,
+            value=float(project_meta["area"]),
+        )
+
+    assessment_notes = st.text_area(
+        "Assessment Notes",
+        value=project_meta["notes"],
     )
 
-assessment_notes = st.text_area(
-    "Assessment Notes",
-    placeholder="Optional project notes...",
+    next_version = get_next_version_number(project_name)
+
+    st.info(f"This will be saved as **Version {next_version}** of '{project_name}'.")
+
+version_notes = st.text_area(
+    "Version Notes",
+    placeholder="Describe what changed in this design iteration...",
 )
 
 st.divider()
@@ -424,6 +482,30 @@ if not st.session_state.existing_results_df.empty:
         "Total",
         f"{summary['Total']:,.2f} kgCO₂e",
     )
+
+st.divider()
+
+save_version = st.button(
+    "💾 Save This Version",
+    use_container_width=True,
+)
+
+if save_version:
+    if not project_name:
+        st.error("Please enter or select a project name before saving.")
+    else:
+        version_number = save_project_version(
+            project_name=project_name,
+            area=building_area,
+            notes=assessment_notes,
+            version_notes=version_notes,
+            design_df=st.session_state.existing_design_df,
+            results_df=st.session_state.existing_results_df,
+            summary=st.session_state.existing_summary,
+        )
+        st.success(
+            f"Saved as Version {version_number} of '{project_name}'."
+        )
 
     st.divider()
 
