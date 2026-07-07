@@ -5,3 +5,4 @@ openpyxl
 plotly
 xlsxwriter
 qrcode[pil]>=7.4
+pip-tools>=7.4
