@@ -1,4 +1,6 @@
 from pathlib import Path
+import time
+
 import pandas as pd
 from openpyxl import load_workbook
 
@@ -91,6 +93,8 @@ def load_carbon_database():
         required by the application.
     """
 
+    start = time.perf_counter()
+
     boq = load_sheet(
         CARBON_DATABASE_FILE,
         "BOQ",
@@ -140,6 +144,11 @@ def load_carbon_database():
             .unique()
             .tolist()
         )
+
+    print(
+        f"Carbon database loaded in "
+        f"{time.perf_counter() - start:.3f} seconds"
+    )
 
     return {
 
