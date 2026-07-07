@@ -1,30 +1,95 @@
 #!/bin/bash
-# Move to the directory where this script is located
-cd "$(dirname "$0")"
 
-echo "----------------------------------------"
-echo "Initializing Anaconda Environment..."
-echo "----------------------------------------"
+ENV_NAME="JFC-Embodied-Carbon-App"
 
-# 1. Source conda setup so the shell understands the 'conda' command
-# This safely loads the conda configuration for Mac users
-if [ -f "$HOME/opt/anaconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/opt/anaconda3/etc/profile.d/conda.sh"
-elif [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/anaconda3/etc/profile.d/conda.sh"
-elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
-    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+# ==========================================================
+# Locate and load conda
+# ==========================================================
+
+CONDA_BASE=$(conda info --base 2>/dev/null)
+
+if [ -z "$CONDA_BASE" ]; then
+    echo "ERROR: Conda was not found on this machine."
+    echo "Please install Miniconda/Anaconda, or check your PATH."
+    read -p "Press Enter to close..."
+    exit 1
 fi
 
-echo "Launching Streamlit App..."
-echo "Share your Local IP with people on your Wi-Fi!"
-echo "----------------------------------------"
+source "$CONDA_BASE/etc/profile.d/conda.sh"
 
-# 2. Use 'conda run' to execute streamlit directly inside your environment
-conda run -n JFC-Embodied-Carbon-App --no-capture-output streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+# ==========================================================
+# Check the environment exists
+# ==========================================================
 
-# 3. If it crashes, keep the window open so you can see why
-echo ""
-echo "Streamlit has stopped."
-echo "Press any key to close this window..."
-read -n 1
+if ! conda env list | grep -q "$ENV_NAME"; then
+    echo "ERROR: Conda environment '$ENV_NAME' was not found."
+    echo ""
+    echo "Create it first with:"
+    echo "  conda create -n $ENV_NAME python=3.11"
+    echo "  conda activate $ENV_NAME"
+    echo "  pip install -r requirements.txt"
+    read -p "Press Enter to close..."
+    exit 1
+fi
+
+conda activate "$ENV_NAME"
+
+# Move to the script's own directory so relative paths (data/, utils/) resolve correctly
+cd "$(dirname "$0")"
+
+# ==========================================================
+# Sync requirements.txt against what's installed
+# ==========================================================
+if [ "$CURRENT_HASH" != "$STORED_HASH" ]; then
+    echo "requirements.txt has changed since last run — syncing packages..."
+
+    # Install/upgrade everything listed in requirements.txt
+    pip install -r requirements.txt
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to install requirements. Check your internet connection"
+        echo "or the requirements.txt file for errors."
+        read -p "Press Enter to close..."
+        exit 1
+    fi
+
+    # Remove pip-installed packages that are no longer in requirements.txt
+    REQUIRED_PACKAGES=$(grep -oE '^[a-zA-Z0-9_\-]+' requirements.txt | tr 'A-Z' 'a-z')
+
+    INSTALLED_PACKAGES=$(pip freeze | grep -oE '^[a-zA-Z0-9_\-]+' | tr 'A-Z' 'a-z')
+
+    TO_REMOVE=""
+    for pkg in $INSTALLED_PACKAGES; do
+        if ! echo "$REQUIRED_PACKAGES" | grep -qx "$pkg"; then
+            TO_REMOVE="$TO_REMOVE $pkg"
+        fi
+    done
+
+    if [ -n "$TO_REMOVE" ]; then
+        echo "Removing packages no longer in requirements.txt:$TO_REMOVE"
+        pip uninstall -y $TO_REMOVE
+    fi
+
+    echo "$CURRENT_HASH" > "$REQUIREMENTS_HASH_FILE"
+    echo "Packages synced successfully."
+else
+    echo "Requirements already up to date — skipping install."
+fi
+
+# ==========================================================
+# Final sanity check
+# ==========================================================
+
+if ! python -c "import streamlit" 2>/dev/null; then
+    echo "ERROR: Streamlit still not found after sync. Something went wrong."
+    read -p "Press Enter to close..."
+    exit 1
+fi
+
+echo "Environment '$ENV_NAME' verified. Launching app..."
+
+# ==========================================================
+# Launch
+# ==========================================================
+
+streamlit run app.py --server.address=0.0.0.0 --server.port=8501
