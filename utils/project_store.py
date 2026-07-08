@@ -170,3 +170,50 @@ def save_project_version(
         conn.commit()
 
     return version_number
+
+def update_version_notes(project_name, version_number, new_notes):
+    """
+    Update the version notes for a specific saved version.
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE versions
+            SET version_notes = ?
+            WHERE project_name = ? AND version = ?
+            """,
+            (new_notes, project_name, version_number),
+        )
+        conn.commit()
+
+
+def delete_version(project_name, version_number):
+    """
+    Delete a specific saved version. Does not renumber remaining
+    versions, so version history stays honest (e.g. deleting v2
+    leaves v1 and v3, rather than relabeling v3 as v2).
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM versions
+            WHERE project_name = ? AND version = ?
+            """,
+            (project_name, version_number),
+        )
+        conn.commit()
+
+def delete_project(project_name):
+    """
+    Delete a project and all of its saved versions entirely.
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            "DELETE FROM versions WHERE project_name = ?",
+            (project_name,),
+        )
+        conn.execute(
+            "DELETE FROM projects WHERE name = ?",
+            (project_name,),
+        )
+        conn.commit()

@@ -12,6 +12,12 @@ apply_global_styles()
 
 render_header("Version History", APP_SUBTITLE, APP_STATUS)
 
+st.page_link(
+    "pages/5_Manage_Version_History.py",
+    label="🛠️ Manage Version History",
+    icon=None,
+)
+
 st.markdown(
     """
 Browse past design iterations for any project and see how different
