@@ -231,12 +231,8 @@ def database_status_summary():
 
             "sheets": db["carbon"]["sheets"],
 
-            "apparatus": len(
+            "rows": len(
                 db["carbon"]["apparatus_output"]
-            ),
-
-            "boq_rows": len(
-                db["carbon"]["boq"]
             ),
 
         },
@@ -256,7 +252,6 @@ def database_status_summary():
         },
 
     }
-
 # ==========================================================
 # Proposed Design Helpers
 # ==========================================================
