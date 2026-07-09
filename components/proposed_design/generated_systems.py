@@ -1,4 +1,5 @@
 import streamlit as st
+from utils.quantification_engine import quantify_sprinklers
 
 from utils.database_loader import (
     load_standards_database,
@@ -25,16 +26,25 @@ def render_generated_systems():
         building_class = st.session_state.get(
             "building_class"
         )
-        st.write("Building Class:", building_class)
+        
 
         systems = get_required_systems(
             building_class,
             db["building_class"],
         )
 
+        inputs = {
+            "floor_area": st.session_state["floor_area"],
+            "hazard": st.session_state["sprinkler_hazard"],
+        }
+
+        sprinkler_results = quantify_sprinklers(inputs)
+
         st.session_state[
             "generated_systems"
         ] = systems
+
+        st.session_state["sprinkler_results"] = sprinkler_results
 
     if "generated_systems" in st.session_state:
 
@@ -54,6 +64,23 @@ def render_generated_systems():
                 df,
                 use_container_width=True,
                 hide_index=True,
+            )
+            results = st.session_state["sprinkler_results"]
+
+            st.divider()
+
+            st.subheader("Sprinkler Quantification")
+
+            col1, col2 = st.columns(2)
+
+            col1.metric(
+                "Spacing Area",
+                f'{results["spacing_area"]} m²/head'
+            )
+
+            col2.metric(
+                "Sprinkler Heads",
+                results["sprinkler_heads"]
             )
 
     else:
