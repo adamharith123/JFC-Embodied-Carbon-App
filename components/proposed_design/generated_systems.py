@@ -20,10 +20,12 @@ def render_generated_systems():
     ):
 
         db = load_standards_database()
-
+        
+        
         building_class = st.session_state.get(
             "building_class"
         )
+        st.write("Building Class:", building_class)
 
         systems = get_required_systems(
             building_class,

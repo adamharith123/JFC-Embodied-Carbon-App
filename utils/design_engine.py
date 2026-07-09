@@ -8,7 +8,7 @@ from editable engineering databases.
 
 No Streamlit UI code.
 """
-
+import re
 import pandas as pd
 
 
@@ -47,13 +47,20 @@ def get_required_systems(
     print(building_class_df.head(10))
 
     print("=========================================\n")
+    # Extract NCC class (e.g. "5", "9a")
+    match = re.search(r"\d+[A-Za-z]?", building_class)
+    if not match:
+        return pd.DataFrame()
 
+    building_class_code = match.group()
+
+    print("Matched NCC Class:", building_class_code)
     first_column = building_class_df.columns[0]
 
     row = building_class_df[
         building_class_df[first_column]
         .astype(str)
-        .str.startswith(building_class)
+        .str.startswith(building_class_code)
     ]
 
     if row.empty:

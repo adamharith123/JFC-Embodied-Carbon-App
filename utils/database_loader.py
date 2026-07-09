@@ -5,6 +5,7 @@ from openpyxl import load_workbook
 from utils.constants import (
     CARBON_DATABASE_FILE,
     STANDARDS_DATABASE_FILE,
+    USER_INPUT_DATABASE_FILE,
 )
 
 # ==========================================================
@@ -197,6 +198,39 @@ def load_standards_database():
 
     }
 
+# ==========================================================
+# User Input Database
+# ==========================================================
+
+def load_user_input_database():
+    """
+    Load the engineering user input database.
+    """
+
+    return {
+
+        "path": USER_INPUT_DATABASE_FILE,
+
+        "exists": workbook_exists(
+            USER_INPUT_DATABASE_FILE
+        ),
+
+        "sheets": get_workbook_sheet_names(
+            USER_INPUT_DATABASE_FILE
+        ),
+
+        "database": load_sheet(
+            USER_INPUT_DATABASE_FILE,
+            "Database",
+        ),
+
+        "user_inputs": load_sheet(
+            USER_INPUT_DATABASE_FILE,
+            "User Inputs",
+        ),
+
+    }
+
 
 # ==========================================================
 # Application Loader
@@ -209,6 +243,8 @@ def load_all_databases():
         "carbon": load_carbon_database(),
 
         "standards": load_standards_database(),
+
+        "user_input": load_user_input_database(),
 
     }
 

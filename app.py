@@ -68,7 +68,14 @@ for col, (name, info) in zip(cols, status.items()):
 
         st.caption(str(info["path"]))
         st.metric("Sheets", len(info["sheets"]))
-        st.metric("Rows detected", info["rows"])
+        if "rows" in info:
+            st.metric("Rows detected", info["rows"])
+
+        if "apparatus" in info:
+            st.metric("Apparatus", info["apparatus"])
+
+        if "boq_rows" in info:
+            st.metric("BOQ Rows", info["boq_rows"])
 
 st.divider()
 
