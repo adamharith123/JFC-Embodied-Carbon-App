@@ -162,8 +162,17 @@ h3 {{
 }}
 
 .logo-card img {{
+    object-fit: contain;
+}}
+
+.arup-logo {{
     max-height: 42px;
     max-width: 135px;
+}}
+
+.jfc-logo {{
+    max-height: 60px;
+    max-width: 140px;
 }}
 
 
@@ -268,8 +277,8 @@ def render_header(title: str, subtitle: str, status: str):
     jfc = image_to_base64(JFC_LOGO)
     arup = image_to_base64(ARUP_LOGO)
 
-    jfc_html = f'<img src="{jfc}" alt="JFC logo">' if jfc else "JFC"
-    arup_html = f'<img src="{arup}" alt="ARUP logo">' if arup else "ARUP"
+    jfc_html = f'<img class="jfc-logo" src="{jfc}" alt="JFC logo">' if jfc else "JFC"
+    arup_html = f'<img class="arup-logo" src="{arup}" alt="ARUP logo">' if arup else "ARUP"
 
     st.markdown(
         f"""
