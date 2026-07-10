@@ -575,38 +575,4 @@ if not st.session_state.existing_results_df.empty:
                 use_container_width=True,
             )
 
-    # ==========================================================
-    # Carbon Analysis Dashboard
-    # ==========================================================
-
-    st.divider()
-
-    st.subheader("Carbon Analysis Dashboard")
-
-    left, right = st.columns(2)
-
-    with left:
-
-        fig = create_apparatus_pie_chart(
-            st.session_state.existing_results_df
-        )
-
-        if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-            )
-
-    with right:
-
-        fig = create_lifecycle_bar_chart(
-            st.session_state.existing_summary
-        )
-
-        if fig is not None:
-            st.plotly_chart(
-                fig,
-                use_container_width=True,
-            )
-
 render_footer()
