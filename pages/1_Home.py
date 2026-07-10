@@ -21,4 +21,27 @@ for name, info in status.items():
     else:
         st.warning(f"{name}: missing")
 
+from utils.network_info import get_app_url, generate_qr_code_bytes
+
+# ==========================================================
+# Connect Here
+# ==========================================================
+
+with st.expander("📶 Connect Here (for other devices on this network)", expanded=False):
+
+    app_url = get_app_url(port=8501)
+
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        qr_bytes = generate_qr_code_bytes(app_url)
+        st.image(qr_bytes, width=200)
+
+    with col2:
+        st.markdown("**Scan this QR code on your iPad's camera app**, or type the address below into Safari:")
+        st.code(app_url, language=None)
+        st.caption(
+            "Make sure your device is connected to the same WiFi network as this host machine."
+        )
+
 render_footer()

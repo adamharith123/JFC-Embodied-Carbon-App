@@ -190,6 +190,7 @@ else:
 version_notes = st.text_area(
     "Version Notes",
     placeholder="Describe what changed in this design iteration...",
+    key=f"version_notes_{project_mode}_{project_name}",
 )
 
 st.divider()
@@ -384,22 +385,18 @@ with st.container(key=csv_key):
             hide_index=True,
         )
 
-# ==========================================================
-# Calculate
-# ==========================================================
 
 # ==========================================================
-# Calculate
+# Calculation Logic (shared by Calculate and Save buttons)
 # ==========================================================
 
-st.divider()
-
-calculate = st.button(
-    "Calculate Embodied Carbon",
-    use_container_width=True,
-)
-
-if calculate:
+def run_calculation():
+    """
+    Runs the embodied carbon calculation using whichever data
+    sources are currently active, and stores results in session
+    state. Returns True if a calculation was successfully run,
+    False if there was no data to calculate from.
+    """
 
     sources = []
 
@@ -414,41 +411,91 @@ if calculate:
             "No active data source contains any systems. Enable a source "
             "and add data before calculating."
         )
-    else:
-        combined_df = pd.concat(sources, ignore_index=True)
+        return False
 
-        grouped_df = (
-            combined_df
-            .groupby("Fire Safety System", as_index=False)["Quantity"]
-            .sum()
+    combined_df = pd.concat(sources, ignore_index=True)
+
+    grouped_df = (
+        combined_df
+        .groupby("Fire Safety System", as_index=False)["Quantity"]
+        .sum()
+    )
+
+    apparatus_names = carbon_db["apparatus_output"]["Apparatus"]
+
+    unmatched = grouped_df[
+        ~grouped_df["Fire Safety System"].isin(apparatus_names)
+    ]
+
+    if not unmatched.empty:
+        st.warning(
+            "The following systems were not found in the Carbon Database "
+            "and will be excluded from the results: "
+            + ", ".join(unmatched["Fire Safety System"].tolist())
         )
 
-        apparatus_names = carbon_db["apparatus_output"]["Apparatus"]
+    results_df = calculate_existing_design(
+        grouped_df,
+        carbon_db["apparatus_output"],
+    )
 
-        unmatched = grouped_df[
-            ~grouped_df["Fire Safety System"].isin(apparatus_names)
-        ]
+    summary = summarise_results(results_df)
 
-        if not unmatched.empty:
-            st.warning(
-                "The following systems were not found in the Carbon Database "
-                "and will be excluded from the results: "
-                + ", ".join(unmatched["Fire Safety System"].tolist())
+    st.session_state.existing_results_df = results_df
+    st.session_state.existing_summary = summary
+
+    return True
+
+
+# ==========================================================
+# Calculate Button
+# ==========================================================
+
+st.divider()
+
+calculate = st.button(
+    "Calculate Embodied Carbon",
+    use_container_width=True,
+)
+
+if calculate:
+    run_calculation()
+
+# ==========================================================
+# Save Version
+# ==========================================================
+
+st.divider()
+
+save_version = st.button(
+    "💾 Save This Version",
+    use_container_width=True,
+)
+
+if save_version:
+
+    if not project_name:
+        st.error("Please enter or select a project name before saving.")
+
+    else:
+
+        calculated = run_calculation()
+
+        if calculated and not st.session_state.existing_results_df.empty:
+
+            version_number = save_project_version(
+                project_name=project_name,
+                area=building_area,
+                notes=assessment_notes,
+                version_notes=version_notes,
+                design_df=st.session_state.existing_design_df,
+                results_df=st.session_state.existing_results_df,
+                summary=st.session_state.existing_summary,
             )
 
-        results_df = calculate_existing_design(
-            grouped_df,
-            carbon_db["apparatus_output"],
-        )
-
-        summary = summarise_results(results_df)
-
-        st.session_state.existing_results_df = results_df
-        st.session_state.existing_summary = summary
-
-# ==========================================================
-# Results
-# ==========================================================
+            st.success(
+                f"Saved as Version {version_number} of '{project_name}'."
+            )
 
 # ==========================================================
 # Results
@@ -483,30 +530,6 @@ if not st.session_state.existing_results_df.empty:
         "Total",
         f"{summary['Total']:,.2f} kgCO₂e",
     )
-
-st.divider()
-
-save_version = st.button(
-    "💾 Save This Version",
-    use_container_width=True,
-)
-
-if save_version:
-    if not project_name:
-        st.error("Please enter or select a project name before saving.")
-    else:
-        version_number = save_project_version(
-            project_name=project_name,
-            area=building_area,
-            notes=assessment_notes,
-            version_notes=version_notes,
-            design_df=st.session_state.existing_design_df,
-            results_df=st.session_state.existing_results_df,
-            summary=st.session_state.existing_summary,
-        )
-        st.success(
-            f"Saved as Version {version_number} of '{project_name}'."
-        )
 
     st.divider()
 

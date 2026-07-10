@@ -1,74 +1,127 @@
 """
-Project version storage.
+Project version storage — SQLite backend.
 
-Handles persistence of project metadata and design/version history,
-so designers can iterate on the same project over time and retrieve
-any past version and its results.
+Single source of truth stored in a shared .db file, intended to sit
+on a permanent on-site host machine and be accessed by multiple
+engineers over the local network.
 """
 
+import sqlite3
 import json
 import os
 from datetime import datetime
+from contextlib import contextmanager
 
-STORE_PATH = os.path.join("data", "project_store.json")
-
-
-def _ensure_store():
-    os.makedirs(os.path.dirname(STORE_PATH), exist_ok=True)
-    if not os.path.exists(STORE_PATH):
-        with open(STORE_PATH, "w") as f:
-            json.dump({}, f)
+DB_PATH = os.path.join("data", "project_store.db")
 
 
-def _load_store():
-    _ensure_store()
-    with open(STORE_PATH, "r") as f:
-        return json.load(f)
+def _ensure_db():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS projects (
+                name TEXT PRIMARY KEY,
+                area REAL,
+                notes TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT,
+                version INTEGER,
+                version_notes TEXT,
+                timestamp TEXT,
+                design_json TEXT,
+                results_json TEXT,
+                summary_json TEXT,
+                FOREIGN KEY (project_name) REFERENCES projects(name)
+            )
+            """
+        )
+        conn.commit()
 
 
-def _save_store(store):
-    _ensure_store()
-    with open(STORE_PATH, "w") as f:
-        json.dump(store, f, indent=2, default=str)
+@contextmanager
+def _get_connection():
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    # WAL mode allows concurrent readers while a write is in progress —
+    # important since several iPads may be viewing history while
+    # someone else saves a new version.
+    conn.execute("PRAGMA journal_mode=WAL;")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+_ensure_db()
 
 
 def get_project_names():
-    return sorted(_load_store().keys())
+    with _get_connection() as conn:
+        rows = conn.execute(
+            "SELECT name FROM projects ORDER BY name"
+        ).fetchall()
+    return [r[0] for r in rows]
 
 
 def get_project_meta(project_name):
-    project = _load_store().get(project_name)
-    if not project:
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT area, notes FROM projects WHERE name = ?",
+            (project_name,),
+        ).fetchone()
+
+    if not row:
         return None
-    return {
-        "area": project.get("area", 0.0),
-        "notes": project.get("notes", ""),
-    }
+
+    return {"area": row[0], "notes": row[1]}
 
 
 def get_next_version_number(project_name):
-    project = _load_store().get(project_name)
-    if not project or not project.get("versions"):
+    with _get_connection() as conn:
+        row = conn.execute(
+            "SELECT MAX(version) FROM versions WHERE project_name = ?",
+            (project_name,),
+        ).fetchone()
+
+    if not row or row[0] is None:
         return 1
-    return max(v["version"] for v in project["versions"]) + 1
+
+    return row[0] + 1
 
 
 def get_project_versions(project_name):
-    project = _load_store().get(project_name)
-    if not project:
-        return []
-    return sorted(
-        project.get("versions", []),
-        key=lambda v: v["version"],
-        reverse=True,
-    )
+    with _get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT version, version_notes, timestamp,
+                   design_json, results_json, summary_json
+            FROM versions
+            WHERE project_name = ?
+            ORDER BY version DESC
+            """,
+            (project_name,),
+        ).fetchall()
 
-
-def get_version_data(project_name, version_number):
-    for v in get_project_versions(project_name):
-        if v["version"] == version_number:
-            return v
-    return None
+    versions = []
+    for r in rows:
+        versions.append(
+            {
+                "version": r[0],
+                "version_notes": r[1],
+                "timestamp": r[2],
+                "design": json.loads(r[3]),
+                "results": json.loads(r[4]),
+                "summary": json.loads(r[5]),
+            }
+        )
+    return versions
 
 
 def save_project_version(
@@ -80,29 +133,87 @@ def save_project_version(
     results_df,
     summary,
 ):
-    store = _load_store()
-
-    project = store.setdefault(
-        project_name,
-        {"area": area, "notes": notes, "versions": []},
-    )
-
-    project["area"] = area
-    project["notes"] = notes
-
     version_number = get_next_version_number(project_name)
+    timestamp = datetime.now().isoformat(timespec="seconds")
 
-    project["versions"].append(
-        {
-            "version": version_number,
-            "version_notes": version_notes,
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "design": design_df.to_dict(orient="records"),
-            "results": results_df.to_dict(orient="records"),
-            "summary": summary,
-        }
-    )
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (name, area, notes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                area = excluded.area,
+                notes = excluded.notes
+            """,
+            (project_name, area, notes),
+        )
 
-    _save_store(store)
+        conn.execute(
+            """
+            INSERT INTO versions (
+                project_name, version, version_notes, timestamp,
+                design_json, results_json, summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                project_name,
+                version_number,
+                version_notes,
+                timestamp,
+                design_df.to_json(orient="records"),
+                results_df.to_json(orient="records"),
+                json.dumps(summary),
+            ),
+        )
+
+        conn.commit()
 
     return version_number
+
+def update_version_notes(project_name, version_number, new_notes):
+    """
+    Update the version notes for a specific saved version.
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE versions
+            SET version_notes = ?
+            WHERE project_name = ? AND version = ?
+            """,
+            (new_notes, project_name, version_number),
+        )
+        conn.commit()
+
+
+def delete_version(project_name, version_number):
+    """
+    Delete a specific saved version. Does not renumber remaining
+    versions, so version history stays honest (e.g. deleting v2
+    leaves v1 and v3, rather than relabeling v3 as v2).
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM versions
+            WHERE project_name = ? AND version = ?
+            """,
+            (project_name, version_number),
+        )
+        conn.commit()
+
+def delete_project(project_name):
+    """
+    Delete a project and all of its saved versions entirely.
+    """
+    with _get_connection() as conn:
+        conn.execute(
+            "DELETE FROM versions WHERE project_name = ?",
+            (project_name,),
+        )
+        conn.execute(
+            "DELETE FROM projects WHERE name = ?",
+            (project_name,),
+        )
+        conn.commit()
