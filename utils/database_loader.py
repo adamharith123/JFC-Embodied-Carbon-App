@@ -1,6 +1,8 @@
 from pathlib import Path
 import pandas as pd
 from openpyxl import load_workbook
+import os
+
 
 from utils.constants import (
     CARBON_DATABASE_FILE,
@@ -20,6 +22,17 @@ def workbook_exists(path: Path) -> bool:
         ".xlsm",
         ".xls",
     ]
+
+def _file_mtime(path):
+    """
+    Returns the file's last-modified time, used purely as a cache key
+    so cached data automatically refreshes if the Excel file changes
+    on disk, without needing a manual cache-clear.
+    """
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return None
 
 
 def get_workbook_sheet_names(path: Path):
@@ -81,7 +94,8 @@ def load_sheet(path: Path, sheet_name: str):
 # Carbon Database
 # ==========================================================
 
-def load_carbon_database():
+@st.cache_data
+def load_carbon_database(_mtime=None):
     """
     Load the embodied carbon database.
 
@@ -172,7 +186,8 @@ def load_carbon_database():
 # Standards Database
 # ==========================================================
 
-def load_standards_database():
+@st.cache_data
+def load_standards_database(_mtime=None):
     """
     Load the standards database.
     """
@@ -243,9 +258,9 @@ def load_all_databases():
 
     return {
 
-        "carbon": load_carbon_database(),
+        "carbon": load_carbon_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE)),
 
-        "standards": load_standards_database(),
+        "standards": load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE)),
 
         "user_input": load_user_input_database(),
 
@@ -300,7 +315,7 @@ def get_building_classes():
     Return the available NCC building classes.
     """
 
-    df = load_standards_database()["building_class"]
+    df = load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE))["building_class"]
 
     if df.empty:
         return []
@@ -332,4 +347,4 @@ def get_standards_list():
     Return the Standards List worksheet.
     """
 
-    return load_standards_database()["standards_list"]
+    return load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE))["standards_list"]

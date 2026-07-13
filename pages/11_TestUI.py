@@ -13,6 +13,8 @@ from utils.project_store import (
 from utils.database_loader import load_carbon_database, get_building_classes
 from utils.calculations import summarise_results
 from utils.charts import create_apparatus_pie_chart, create_lifecycle_bar_chart
+from utils.database_loader import _file_mtime
+from utils.constants import CARBON_DATABASE_FILE
 
 from utils.proposed_design_calculations import (
     calculate_equivalent_quantity,
@@ -206,7 +208,7 @@ if "test_last_saved_snapshot" not in st.session_state:
 if "test_show_unsaved_dialog" not in st.session_state:
     st.session_state.test_show_unsaved_dialog = False
 
-carbon_db = load_carbon_database()
+carbon_db = load_carbon_database(_mtime=_file_mtime(CARBON_DATABASE_FILE))
 
 # ==========================================================
 # STEP 1: Project Information
