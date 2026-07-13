@@ -1272,6 +1272,21 @@ else:
             )
             st.session_state.test_is_new_unsaved_draft = False
 
+        else:
+
+            finalize_version(
+                project_name=project_name,
+                version_number=version_number,
+                area=info.get("building_area"),
+                notes=info.get("assessment_notes"),
+                version_notes=info.get("version_notes"),
+                design_df=build_design_dataframe(),
+                results_df=st.session_state.test_results_df,
+                summary=st.session_state.test_summary,
+            )
+
+            st.session_state.test_is_new_unsaved_draft = False
+
         st.session_state.test_dirty = False
         st.session_state.test_last_saved_snapshot = copy.deepcopy(st.session_state.test_categories)
 
@@ -1743,6 +1758,8 @@ else:
         run_calculation()
 
     st.divider()
+
+    save_label = "💾 Update Version" if st.session_state.test_editing_mode == "edit" else "💾 Save This Version"
 
     save_label = "💾 Update Version" if st.session_state.test_editing_mode == "edit" else "💾 Save This Version"
     save_version = st.button(save_label, use_container_width=True)
