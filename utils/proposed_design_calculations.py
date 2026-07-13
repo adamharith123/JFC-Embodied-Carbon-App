@@ -123,3 +123,135 @@ def get_available_product_types(apparatus_output_df, apparatus_name):
         .unique()
         .tolist()
     )
+
+import math
+
+
+# ==========================================================
+# Sprinklers
+# ==========================================================
+
+SPRINKLER_HAZARD_AREA_PER_HEAD_M2 = {
+    "Low": 21,
+    "Ordinary": 12,
+    "High": 9,
+}
+
+
+def default_linear_spacing_for_hazard(hazard_rating):
+    """
+    Converts a hazard classification's area-per-head allowance into
+    an equivalent linear spacing (m), since Area = Linear Spacing^2.
+    """
+    area_per_head_m2 = SPRINKLER_HAZARD_AREA_PER_HEAD_M2.get(hazard_rating, 12)
+    return math.sqrt(area_per_head_m2)
+
+
+def calculate_sprinkler_head_quantity(determination_type, input_value, building_area_m2):
+    """
+    determination_type : "quantity" or "linear_spacing"
+    input_value         : either a straight head count, or a linear
+                           spacing value in metres
+    """
+
+    if determination_type == "quantity":
+        return input_value
+
+    if determination_type == "linear_spacing":
+        if not building_area_m2 or building_area_m2 <= 0:
+            return None
+        if not input_value or input_value <= 0:
+            return None
+        return building_area_m2 / (input_value ** 2)
+
+    return None
+
+
+def calculate_sprinkler_pipework_default_length(
+    num_risers,
+    num_storeys,
+    floor_to_floor_height_m,
+    sprinkler_head_quantity,
+    floor_area_m2,
+    linear_spacing_m,
+):
+    """
+    Risers x Storeys x Floor-to-Floor Height + Sprinkler Number x
+    Floor Area / sqrt(Linear Spacing)
+
+    Returns None if any required input is missing or zero, since the
+    formula can't be evaluated meaningfully without all of them.
+    """
+
+    required_inputs = [
+        num_risers,
+        num_storeys,
+        floor_to_floor_height_m,
+        sprinkler_head_quantity,
+        floor_area_m2,
+        linear_spacing_m,
+    ]
+
+    if any(v is None or v == 0 for v in required_inputs):
+        return None
+
+    riser_length = num_risers * num_storeys * floor_to_floor_height_m
+    lateral_length = (sprinkler_head_quantity * floor_area_m2) / math.sqrt(linear_spacing_m)
+
+    return riser_length + lateral_length
+
+
+# ==========================================================
+# Hose Reels (calculation logic ready - UI not yet wired)
+# ==========================================================
+
+DEFAULT_HOSE_REEL_COVERAGE_AREA_M2 = 30
+
+
+def calculate_hose_reel_count(total_area_m2, coverage_area_per_reel_m2=None):
+    coverage = coverage_area_per_reel_m2 or DEFAULT_HOSE_REEL_COVERAGE_AREA_M2
+    if not total_area_m2 or coverage <= 0:
+        return None
+    return total_area_m2 / coverage
+
+
+# ==========================================================
+# Extinguishers (calculation logic ready - UI not yet wired)
+# ==========================================================
+# Per spec: the descriptive-input mode (fire class / hazard / type /
+# special risk) always contributes zero for now. Only Quantity
+# Override actually calculates.
+
+def calculate_extinguisher_quantity(mode, quantity_override_value):
+    if mode == "quantity_override":
+        return quantity_override_value
+    return 0  # descriptive-input mode always returns 0, per spec
+
+
+# ==========================================================
+# Emergency Lighting (calculation logic ready - UI not yet wired)
+# ==========================================================
+
+DEFAULT_LUMINAIRE_COVERAGE_M2 = 100
+DEFAULT_EGRESS_CORRIDOR_FACTOR = 10
+
+
+def calculate_luminaire_count(
+    protected_area_m2,
+    number_of_exits,
+    number_of_stairs,
+    coverage_per_luminaire_m2=None,
+    egress_corridor_factor=None,
+    luminaire_count_override=None,
+):
+    if luminaire_count_override:
+        return luminaire_count_override
+
+    coverage = coverage_per_luminaire_m2 or DEFAULT_LUMINAIRE_COVERAGE_M2
+    egress_factor = egress_corridor_factor or DEFAULT_EGRESS_CORRIDOR_FACTOR
+
+    if not protected_area_m2 or coverage <= 0:
+        return None
+
+    base_count = (protected_area_m2 / coverage) * egress_factor
+    return base_count + (number_of_exits or 0) + (2 * (number_of_stairs or 0))
