@@ -14,6 +14,24 @@ from utils.database_loader import load_carbon_database, get_building_classes
 from utils.calculations import summarise_results
 from utils.charts import create_apparatus_pie_chart, create_lifecycle_bar_chart
 
+from utils.fire_system_config import (
+    CATEGORY_NAMES,
+    CATEGORY_SUBCATEGORIES,
+    DETERMINATION_TYPE_OPTIONS,
+    DETERMINATION_TYPE_LABELS,
+    get_apparatus_name,
+    get_dts_default,
+    get_determination_type_label,
+    validate_apparatus_names,
+)
+from utils.proposed_design_calculations import (
+    calculate_equivalent_quantity,
+    calculate_component_carbon,
+    find_carbon_factors_row,
+    find_product_carbon_factors_row,
+    get_available_product_types,
+)
+
 # ==========================================================
 # Page Configuration
 # ==========================================================
@@ -52,65 +70,28 @@ st.markdown(
 render_header("TestUI", APP_SUBTITLE, APP_STATUS)
 
 # ==========================================================
-# Category / Subcategory Definitions
-# ==========================================================
-
-CATEGORY_NAMES = {
-    1: "Detection",
-    2: "Category 2",
-    3: "Category 3",
-    4: "Category 4",
-    5: "Category 5",
-    6: "Category 6",
-    7: "Category 7",
-    8: "Category 8",
-    9: "Category 9",
-    10: "Category 10",
-}
-
-# Which subcategories live under each category, in order
-CATEGORY_SUBCATEGORIES = {
-    1: ["Detectors"],
-    2: [],
-    3: [],
-    4: [],
-    5: [],
-    6: [],
-    7: [],
-    8: [],
-    9: [],
-    10: [],
-}
-
-# Maps (category, subcategory) -> Apparatus name in the Carbon Database
-CATEGORY_APPARATUS_MAP = {
-    (1, "Detectors"): "Heat Detector",
-}
-
-DETERMINATION_TYPE_OPTIONS = ["Total Units", "Grid Spacing"]
-UNIT_OPTIONS = ["m2", "units"]
-
-TABLE_COLUMNS = ["Determination Type", "Value", "Units", "Component Type"]
-
-# ==========================================================
 # Table Templates
 # ==========================================================
 
 def empty_display_row():
     return pd.DataFrame(
-        [{"Determination Type": None, "Value": None, "Units": None, "Component Type": None}]
+        [{"Determination Type": None, "Value": None, "Product Type": None}]
     )
 
 
-def dts_default_row():
+def dts_default_row(cat_num, sub_name):
+    dts = get_dts_default(cat_num, sub_name)
+    label = get_determination_type_label(dts["determination_type"])
     return pd.DataFrame(
-        [{"Determination Type": "Grid Spacing", "Value": 10, "Units": "m2", "Component Type": ""}]
+        [{"Determination Type": label, "Value": dts["value"], "Product Type": None}]
     )
 
 
-def pbd_default_row():
+def pbd_default_row(cat_num, sub_name):
+    dts = get_dts_default(cat_num, sub_name)
+    label = get_determination_type_label(dts["determination_type"])
     return pd.DataFrame(
-        [{"Determination Type": "Grid Spacing", "Value": None, "Units": "m2", "Component Type": ""}]
+        [{"Determination Type": label, "Value": None, "Product Type": None}]
     )
 
 
@@ -305,8 +286,9 @@ else:
 
     def run_calculation():
 
-        apparatus_output = carbon_db["apparatus_output"]
-        building_area = st.session_state.test_project_info.get("building_area", 0)
+        apparatus_output_df = carbon_db["apparatus_output"]
+        product_output_df = carbon_db.get("product_output")
+        building_area_m2 = st.session_state.test_project_info.get("building_area", 0)
 
         results = []
         warnings = []
@@ -326,50 +308,66 @@ else:
                     continue
 
                 row = table.iloc[0]
-                det_type = row.get("Determination Type")
-                value = row.get("Value")
+                determination_label = row.get("Determination Type")
+                input_value = row.get("Value")
+                product_type_name = row.get("Product Type")
 
-                apparatus_name = CATEGORY_APPARATUS_MAP.get((cat_num, sub_name))
+                apparatus_name = get_apparatus_name(cat_num, sub_name)
 
                 if not apparatus_name:
                     warnings.append(f"{sub_name}: no Carbon Database mapping configured yet.")
                     continue
 
-                if value is None or pd.isna(value) or value == 0:
-                    warnings.append(f"{sub_name}: Value must be greater than 0 to be included in the calculation.")
-                    continue
-
-                if det_type == "Grid Spacing":
-                    if not building_area or building_area <= 0:
-                        warnings.append(f"{sub_name}: Building Area must be set to use Grid Spacing.")
-                        continue
-                    quantity_equiv = building_area / value
-
-                elif det_type == "Total Units":
-                    quantity_equiv = value
-
-                else:
-                    warnings.append(f"{sub_name}: unrecognised Determination Type.")
-                    continue
-
-                match = apparatus_output[apparatus_output["Apparatus"] == apparatus_name]
-
-                if match.empty:
+                if input_value is None or pd.isna(input_value) or input_value == 0:
                     warnings.append(
-                        f"{sub_name}: '{apparatus_name}' not found in Carbon Database."
+                        f"{sub_name}: Value must be greater than 0 to be included in the calculation."
                     )
                     continue
 
-                match = match.iloc[0]
+                determination_type_key = DETERMINATION_TYPE_LABELS.get(determination_label)
+
+                equivalent_quantity = calculate_equivalent_quantity(
+                    determination_type_key,
+                    input_value,
+                    building_area_m2,
+                )
+
+                if equivalent_quantity is None:
+                    warnings.append(f"{sub_name}: Building Area must be set to use Grid Spacing.")
+                    continue
+
+                carbon_factors_row = None
+
+                if isinstance(product_type_name, str) and product_type_name.strip():
+
+                    carbon_factors_row = find_product_carbon_factors_row(
+                        product_output_df, apparatus_name, product_type_name
+                    )
+
+                    if carbon_factors_row is None:
+                        warnings.append(
+                            f"{sub_name}: Product Type '{product_type_name}' not found for "
+                            f"'{apparatus_name}' - using generic apparatus average instead."
+                        )
+
+                if carbon_factors_row is None:
+                    carbon_factors_row = find_carbon_factors_row(apparatus_output_df, apparatus_name)
+
+                if carbon_factors_row is None:
+                    warnings.append(f"{sub_name}: '{apparatus_name}' not found in Carbon Database.")
+                    continue
+
+                carbon_result = calculate_component_carbon(equivalent_quantity, carbon_factors_row)
 
                 results.append(
                     {
                         "Apparatus": sub_name,
-                        "Quantity": quantity_equiv,
-                        "A1-A3": float(match["A1-3"]) * quantity_equiv,
-                        "A4": float(match["A4"]) * quantity_equiv,
-                        "A5": float(match["A5"]) * quantity_equiv,
-                        "Total": float(match["Total (A1-3 + A4 + A5)"]) * quantity_equiv,
+                        "Product Type": product_type_name if isinstance(product_type_name, str) and product_type_name.strip() else "(Generic average)",
+                        "Quantity": equivalent_quantity,
+                        "A1-A3": carbon_result["A1-A3"],
+                        "A4": carbon_result["A4"],
+                        "A5": carbon_result["A5"],
+                        "Total": carbon_result["Total"],
                     }
                 )
 
@@ -404,8 +402,7 @@ else:
                             "Status": status,
                             "Determination Type": None,
                             "Value": None,
-                            "Units": None,
-                            "Component Type": None,
+                            "Product Type": None,
                         }
                     )
                 else:
@@ -417,8 +414,7 @@ else:
                             "Status": status,
                             "Determination Type": r.get("Determination Type"),
                             "Value": r.get("Value"),
-                            "Units": r.get("Units"),
-                            "Component Type": r.get("Component Type"),
+                            "Product Type": r.get("Product Type"),
                         }
                     )
 
@@ -520,6 +516,21 @@ else:
             st.session_state.test_step = 1
             st.rerun()
 
+    # ==========================================================
+    # Database Name Validation
+    # ==========================================================
+
+    mismatches = validate_apparatus_names(carbon_db.get("apparatus_output"))
+
+    if mismatches:
+        mismatch_text = ", ".join(
+            f"'{sub_name}' expects '{apparatus_name}'" for sub_name, apparatus_name in mismatches
+        )
+        st.warning(
+            f"Some configured systems don't match any Apparatus name in the "
+            f"Carbon Database, so they won't calculate correctly: {mismatch_text}"
+        )
+
     st.divider()
 
     nav_col, body_col = st.columns([1, 3])
@@ -619,9 +630,9 @@ else:
                 sub_state["status"] = new_status
 
                 if new_status == "DTS":
-                    sub_state["table"] = dts_default_row()
+                    sub_state["table"] = dts_default_row(selected, sub_name)
                 elif new_status == "PBD":
-                    sub_state["table"] = pbd_default_row()
+                    sub_state["table"] = pbd_default_row(selected, sub_name)
                 else:
                     sub_state["table"] = empty_display_row()
 
@@ -630,6 +641,8 @@ else:
                 st.rerun()
 
             if sub_state["expanded"]:
+
+                apparatus_name = get_apparatus_name(selected, sub_name)
 
                 if sub_state["status"] == "N/A":
 
@@ -652,13 +665,16 @@ else:
                         column_config={
                             "Determination Type": st.column_config.TextColumn("Determination Type"),
                             "Value": st.column_config.NumberColumn("Value"),
-                            "Units": st.column_config.TextColumn("Units"),
-                            "Component Type": st.column_config.TextColumn("Component Type"),
+                            "Product Type": st.column_config.TextColumn("Product Type"),
                         },
                         key=f"table_dts_{selected}_{sub_name}",
                     )
 
                 else:  # PBD
+
+                    product_options = get_available_product_types(
+                        carbon_db.get("product_output"), apparatus_name
+                    )
 
                     edited = st.data_editor(
                         sub_state["table"],
@@ -676,13 +692,10 @@ else:
                                 min_value=0.0,
                                 required=True,
                             ),
-                            "Units": st.column_config.SelectboxColumn(
-                                "Units",
-                                options=UNIT_OPTIONS,
-                                required=True,
-                            ),
-                            "Component Type": st.column_config.TextColumn(
-                                "Component Type",
+                            "Product Type": st.column_config.SelectboxColumn(
+                                "Product Type",
+                                options=product_options if product_options else ["No products found"],
+                                required=False,
                             ),
                         },
                         key=f"table_pbd_{selected}_{sub_name}",

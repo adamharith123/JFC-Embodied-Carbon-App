@@ -106,6 +106,7 @@ def load_carbon_database():
         CARBON_DATABASE_FILE,
         "dropdowns",
     )
+    product_output = load_product_output()  
 
     systems = []
 
@@ -161,6 +162,8 @@ def load_carbon_database():
         "dropdowns": dropdowns,
 
         "systems": systems,
+
+        "product_output": product_output,
 
     }
 
@@ -310,6 +313,17 @@ def get_building_classes():
         .astype(str)
         .unique()
         .tolist()
+    )
+
+def load_product_output():
+    """
+    Load the Product Output sheet - branded/component-level carbon
+    factors, filterable by Apparatus.
+    """
+
+    return load_sheet(
+        CARBON_DATABASE_FILE,
+        "Product Output",
     )
 
 
