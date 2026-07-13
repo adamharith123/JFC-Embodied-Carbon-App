@@ -78,6 +78,6 @@ REM ==========================================================
 REM Launch
 REM ==========================================================
 
-streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+streamlit run Home.py --server.address=0.0.0.0 --server.port=8501
 
 pause
