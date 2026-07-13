@@ -1,10 +1,12 @@
 from pathlib import Path
 
-APP_NAME = "Fire Safety Embodied Carbon Tool"
+APP_NAME = "Fire Safety Embodied Carbon App"
 APP_VERSION = "v6.0"
 APP_STATUS = "Internal Demonstration"
-APP_SUBTITLE = "JFC × ARUP | Fire Safety Sustainability Tool"
-
+APP_SUBTITLE = (
+    "Developed by Jacaranda Flame Consulting<br>"
+    "in collaboration with ARUP"
+)
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 ASSETS_DIR = ROOT_DIR / "assets"
