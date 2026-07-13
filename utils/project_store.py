@@ -4,6 +4,11 @@ Project version storage — SQLite backend.
 Single source of truth stored in a shared .db file, intended to sit
 on a permanent on-site host machine and be accessed by multiple
 engineers over the local network.
+
+Version numbers are reserved atomically (via a UNIQUE constraint on
+project_name + version) so two people starting a new version at the
+same moment can never collide - the second person automatically gets
+the next number instead.
 """
 
 import sqlite3
@@ -39,19 +44,38 @@ def _ensure_db():
                 design_json TEXT,
                 results_json TEXT,
                 summary_json TEXT,
+                status TEXT DEFAULT 'final',
                 FOREIGN KEY (project_name) REFERENCES projects(name)
             )
             """
         )
         conn.commit()
 
+        # Migration: older databases created before "status" existed
+        # get it added automatically, defaulting existing rows to 'final'.
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(versions)").fetchall()]
+        if "status" not in cols:
+            conn.execute("ALTER TABLE versions ADD COLUMN status TEXT DEFAULT 'final'")
+            conn.commit()
+
+        # Enforce one version number per project. Wrapped in try/except
+        # because if duplicate (project_name, version) rows already
+        # exist from before this fix, creating the index will fail -
+        # in that case, duplicates need manual cleanup via the Manage
+        # Version History page before this constraint can take effect.
+        try:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_project_version "
+                "ON versions(project_name, version)"
+            )
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass
+
 
 @contextmanager
 def _get_connection():
     conn = sqlite3.connect(DB_PATH, timeout=10)
-    # WAL mode allows concurrent readers while a write is in progress —
-    # important since several iPads may be viewing history while
-    # someone else saves a new version.
     conn.execute("PRAGMA journal_mode=WAL;")
     try:
         yield conn
@@ -61,6 +85,10 @@ def _get_connection():
 
 _ensure_db()
 
+
+# ==========================================================
+# Basic Lookups
+# ==========================================================
 
 def get_project_names():
     with _get_connection() as conn:
@@ -101,7 +129,7 @@ def get_project_versions(project_name):
         rows = conn.execute(
             """
             SELECT version, version_notes, timestamp,
-                   design_json, results_json, summary_json
+                   design_json, results_json, summary_json, status
             FROM versions
             WHERE project_name = ?
             ORDER BY version DESC
@@ -116,13 +144,25 @@ def get_project_versions(project_name):
                 "version": r[0],
                 "version_notes": r[1],
                 "timestamp": r[2],
-                "design": json.loads(r[3]),
-                "results": json.loads(r[4]),
-                "summary": json.loads(r[5]),
+                "design": json.loads(r[3]) if r[3] else [],
+                "results": json.loads(r[4]) if r[4] else [],
+                "summary": json.loads(r[5]) if r[5] else {},
+                "status": r[6] if r[6] else "final",
             }
         )
     return versions
 
+
+def get_version_data(project_name, version_number):
+    for v in get_project_versions(project_name):
+        if v["version"] == version_number:
+            return v
+    return None
+
+
+# ==========================================================
+# Original Save (still used by 3_Existing_Design.py)
+# ==========================================================
 
 def save_project_version(
     project_name,
@@ -152,9 +192,9 @@ def save_project_version(
             """
             INSERT INTO versions (
                 project_name, version, version_notes, timestamp,
-                design_json, results_json, summary_json
+                design_json, results_json, summary_json, status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'final')
             """,
             (
                 project_name,
@@ -171,10 +211,187 @@ def save_project_version(
 
     return version_number
 
+
+# ==========================================================
+# Reservation-Based Save (used by TestUI)
+# ==========================================================
+
+def reserve_next_version(project_name, area, notes):
+    """
+    Atomically reserves the next version number for a project by
+    immediately inserting an empty 'draft' row. If two people attempt
+    this at the same moment, the UNIQUE(project_name, version) index
+    guarantees only one succeeds per number - the other retries with
+    the next number automatically.
+    """
+
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (name, area, notes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                area = excluded.area,
+                notes = excluded.notes
+            """,
+            (project_name, area, notes),
+        )
+        conn.commit()
+
+    max_attempts = 10
+
+    for _ in range(max_attempts):
+
+        version_number = get_next_version_number(project_name)
+        timestamp = datetime.now().isoformat(timespec="seconds")
+
+        try:
+            with _get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO versions (
+                        project_name, version, version_notes, timestamp,
+                        design_json, results_json, summary_json, status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')
+                    """,
+                    (
+                        project_name,
+                        version_number,
+                        "",
+                        timestamp,
+                        "[]",
+                        "[]",
+                        "{}",
+                    ),
+                )
+                conn.commit()
+            return version_number
+
+        except sqlite3.IntegrityError:
+            # Someone else claimed this version number in the
+            # meantime - try the next one instead.
+            continue
+
+    raise RuntimeError(
+        "Could not reserve a version number after multiple attempts. "
+        "Please try again."
+    )
+
+
+def finalize_version(
+    project_name,
+    version_number,
+    area,
+    notes,
+    version_notes,
+    design_df,
+    results_df,
+    summary,
+):
+    """
+    Fills in a previously-reserved draft version with real data and
+    marks it as final.
+    """
+
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (name, area, notes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                area = excluded.area,
+                notes = excluded.notes
+            """,
+            (project_name, area, notes),
+        )
+
+        conn.execute(
+            """
+            UPDATE versions
+            SET version_notes = ?,
+                timestamp = ?,
+                design_json = ?,
+                results_json = ?,
+                summary_json = ?,
+                status = 'final'
+            WHERE project_name = ? AND version = ?
+            """,
+            (
+                version_notes,
+                datetime.now().isoformat(timespec="seconds"),
+                design_df.to_json(orient="records"),
+                results_df.to_json(orient="records"),
+                json.dumps(summary),
+                project_name,
+                version_number,
+            ),
+        )
+        conn.commit()
+
+
+def update_existing_version(
+    project_name,
+    version_number,
+    area,
+    notes,
+    version_notes,
+    design_df,
+    results_df,
+    summary,
+):
+    """
+    Overwrites an already-final version's data - used when a saved
+    version is explicitly reopened and edited. Appends a timestamped
+    edit marker to the version notes so the edit history stays
+    visible, rather than silently overwriting what was there before.
+    """
+
+    edit_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+    edit_marker = f"\n[Edited {edit_timestamp}]"
+    combined_notes = (version_notes or "") + edit_marker
+
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (name, area, notes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                area = excluded.area,
+                notes = excluded.notes
+            """,
+            (project_name, area, notes),
+        )
+
+        conn.execute(
+            """
+            UPDATE versions
+            SET version_notes = ?,
+                timestamp = ?,
+                design_json = ?,
+                results_json = ?,
+                summary_json = ?,
+                status = 'final'
+            WHERE project_name = ? AND version = ?
+            """,
+            (
+                combined_notes,
+                datetime.now().isoformat(timespec="seconds"),
+                design_df.to_json(orient="records"),
+                results_df.to_json(orient="records"),
+                json.dumps(summary),
+                project_name,
+                version_number,
+            ),
+        )
+        conn.commit()
+
+
+# ==========================================================
+# Editing / Deletion (used by Manage Version History)
+# ==========================================================
+
 def update_version_notes(project_name, version_number, new_notes):
-    """
-    Update the version notes for a specific saved version.
-    """
     with _get_connection() as conn:
         conn.execute(
             """
@@ -189,9 +406,8 @@ def update_version_notes(project_name, version_number, new_notes):
 
 def delete_version(project_name, version_number):
     """
-    Delete a specific saved version. Does not renumber remaining
-    versions, so version history stays honest (e.g. deleting v2
-    leaves v1 and v3, rather than relabeling v3 as v2).
+    Deletes a specific saved version (or draft). Does not renumber
+    remaining versions, so version history stays honest.
     """
     with _get_connection() as conn:
         conn.execute(
@@ -203,9 +419,10 @@ def delete_version(project_name, version_number):
         )
         conn.commit()
 
+
 def delete_project(project_name):
     """
-    Delete a project and all of its saved versions entirely.
+    Deletes a project and all of its saved versions entirely.
     """
     with _get_connection() as conn:
         conn.execute(
