@@ -14,16 +14,6 @@ from utils.database_loader import load_carbon_database, get_building_classes
 from utils.calculations import summarise_results
 from utils.charts import create_apparatus_pie_chart, create_lifecycle_bar_chart
 
-from utils.fire_system_config import (
-    CATEGORY_NAMES,
-    CATEGORY_SUBCATEGORIES,
-    DETERMINATION_TYPE_OPTIONS,
-    DETERMINATION_TYPE_LABELS,
-    get_apparatus_name,
-    get_dts_default,
-    get_determination_type_label,
-    validate_apparatus_names,
-)
 from utils.proposed_design_calculations import (
     calculate_equivalent_quantity,
     calculate_component_carbon,
@@ -70,6 +60,82 @@ st.markdown(
 render_header("TestUI", APP_SUBTITLE, APP_STATUS)
 
 # ==========================================================
+# Category / Subcategory Definitions
+# ==========================================================
+# This is the single place these relationships are defined. The
+# names here are assumed to be correct - "Apparatus" values just
+# need to match whatever is in the Carbon Database Excel file's
+# Apparatus/Product Type columns.
+
+CATEGORY_NAMES = {
+    1: "Detection",
+    2: "Category 2",
+    3: "Category 3",
+    4: "Category 4",
+    5: "Category 5",
+    6: "Category 6",
+    7: "Category 7",
+    8: "Category 8",
+    9: "Category 9",
+    10: "Category 10",
+}
+
+# Which subcategories live under each category, in order.
+CATEGORY_SUBCATEGORIES = {
+    1: ["Heat Detectors", "Smoke Detectors"],
+    2: [],
+    3: [],
+    4: [],
+    5: [],
+    6: [],
+    7: [],
+    8: [],
+    9: [],
+    10: [],
+}
+
+# Maps (category_number, subcategory_name) -> Apparatus name, exactly
+# as it appears in the Carbon Database's "Apparatus Output" and
+# "Product Output" sheets.
+CATEGORY_APPARATUS_MAP = {
+    (1, "Heat Detectors"): "Heat Detector",
+    (1, "Smoke Detectors"): "Smoke Detector",
+}
+
+# Determination type internal_key -> display label. The label folds
+# the unit into the name itself, so a separate Units column isn't
+# needed in the table.
+DETERMINATION_TYPES = {
+    "total_quantity": "Total Quantity (Units)",
+    "grid_spacing": "Grid Spacing (Side length in metres)",
+}
+
+DETERMINATION_TYPE_LABELS = {label: key for key, label in DETERMINATION_TYPES.items()}
+DETERMINATION_TYPE_OPTIONS = list(DETERMINATION_TYPES.values())
+
+# What DTS assumes automatically for each (category, subcategory)
+# when a user selects "DTS" instead of "PBD".
+DTS_DEFAULTS = {
+    (1, "Heat Detectors"): {"determination_type": "grid_spacing", "value": 10},
+    (1, "Smoke Detectors"): {"determination_type": "grid_spacing", "value": 10},
+}
+
+DEFAULT_DTS_FALLBACK = {"determination_type": "grid_spacing", "value": 10}
+
+
+def get_apparatus_name(cat_num, sub_name):
+    return CATEGORY_APPARATUS_MAP.get((cat_num, sub_name))
+
+
+def get_dts_default(cat_num, sub_name):
+    return DTS_DEFAULTS.get((cat_num, sub_name), DEFAULT_DTS_FALLBACK)
+
+
+def get_determination_type_label(internal_key):
+    return DETERMINATION_TYPES.get(internal_key, internal_key)
+
+
+# ==========================================================
 # Table Templates
 # ==========================================================
 
@@ -78,14 +144,12 @@ def empty_display_row():
         [{"Determination Type": None, "Value": None, "Product Type": None}]
     )
 
-
 def dts_default_row(cat_num, sub_name):
     dts = get_dts_default(cat_num, sub_name)
     label = get_determination_type_label(dts["determination_type"])
     return pd.DataFrame(
         [{"Determination Type": label, "Value": dts["value"], "Product Type": None}]
     )
-
 
 def pbd_default_row(cat_num, sub_name):
     dts = get_dts_default(cat_num, sub_name)
@@ -515,21 +579,6 @@ else:
         else:
             st.session_state.test_step = 1
             st.rerun()
-
-    # ==========================================================
-    # Database Name Validation
-    # ==========================================================
-
-    mismatches = validate_apparatus_names(carbon_db.get("apparatus_output"))
-
-    if mismatches:
-        mismatch_text = ", ".join(
-            f"'{sub_name}' expects '{apparatus_name}'" for sub_name, apparatus_name in mismatches
-        )
-        st.warning(
-            f"Some configured systems don't match any Apparatus name in the "
-            f"Carbon Database, so they won't calculate correctly: {mismatch_text}"
-        )
 
     st.divider()
 
