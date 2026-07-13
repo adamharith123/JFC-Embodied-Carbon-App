@@ -80,18 +80,19 @@ def find_carbon_factors_row(apparatus_output_df, apparatus_name):
     return matching_rows.iloc[0]
 
 
-def find_product_carbon_factors_row(product_output_df, apparatus_name, product_type_name):
+def find_product_carbon_factors_row(apparatus_output_df, apparatus_name, product_type_name):
     """
-    Looks up a specific branded product's carbon factors, filtered
-    to only the product rows belonging to the given apparatus.
+    Looks up a specific branded product's carbon factors from the
+    Apparatus Output sheet, filtered to rows matching both the
+    apparatus and the specific Product Type.
     """
 
-    if product_output_df is None or product_output_df.empty:
+    if apparatus_output_df is None or apparatus_output_df.empty:
         return None
 
-    matching_rows = product_output_df[
-        (product_output_df["Apparatus"] == apparatus_name)
-        & (product_output_df["Product Type"] == product_type_name)
+    matching_rows = apparatus_output_df[
+        (apparatus_output_df["Apparatus"] == apparatus_name)
+        & (apparatus_output_df["Product Type"] == product_type_name)
     ]
 
     if matching_rows.empty:
@@ -100,18 +101,18 @@ def find_product_carbon_factors_row(product_output_df, apparatus_name, product_t
     return matching_rows.iloc[0]
 
 
-def get_available_product_types(product_output_df, apparatus_name):
+def get_available_product_types(apparatus_output_df, apparatus_name):
     """
     Returns the list of Product Type names available for a given
-    apparatus - e.g. the specific branded components that exist for
-    "Smoke Detector" - so the UI dropdown only shows relevant options.
+    apparatus, read from the Apparatus Output sheet - e.g. the
+    specific branded components that exist for "Smoke Detector".
     """
 
-    if product_output_df is None or product_output_df.empty:
+    if apparatus_output_df is None or apparatus_output_df.empty:
         return []
 
-    matching_rows = product_output_df[
-        product_output_df["Apparatus"] == apparatus_name
+    matching_rows = apparatus_output_df[
+        apparatus_output_df["Apparatus"] == apparatus_name
     ]
 
     return (

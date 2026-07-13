@@ -353,7 +353,6 @@ else:
     def run_calculation():
 
         apparatus_output_df = carbon_db["apparatus_output"]
-        product_output_df = carbon_db.get("product_output")
         building_area_m2 = st.session_state.test_project_info.get("building_area", 0)
 
         results = []
@@ -402,25 +401,22 @@ else:
                     warnings.append(f"{sub_name}: Building Area must be set to use Grid Spacing.")
                     continue
 
-                carbon_factors_row = None
-
-                if isinstance(product_type_name, str) and product_type_name.strip():
-
-                    carbon_factors_row = find_product_carbon_factors_row(
-                        product_output_df, apparatus_name, product_type_name
+                if not isinstance(product_type_name, str) or not product_type_name.strip():
+                    warnings.append(
+                        f"{sub_name}: no Product Type selected - this system will not be "
+                        f"included in the calculation until one is chosen."
                     )
+                    continue
 
-                    if carbon_factors_row is None:
-                        warnings.append(
-                            f"{sub_name}: Product Type '{product_type_name}' not found for "
-                            f"'{apparatus_name}' - using generic apparatus average instead."
-                        )
-
-                if carbon_factors_row is None:
-                    carbon_factors_row = find_carbon_factors_row(apparatus_output_df, apparatus_name)
+                carbon_factors_row = find_product_carbon_factors_row(
+                    apparatus_output_df, apparatus_name, product_type_name
+                )
 
                 if carbon_factors_row is None:
-                    warnings.append(f"{sub_name}: '{apparatus_name}' not found in Carbon Database.")
+                    warnings.append(
+                        f"{sub_name}: Product Type '{product_type_name}' not found for "
+                        f"'{apparatus_name}' in the Carbon Database."
+                    )
                     continue
 
                 carbon_result = calculate_component_carbon(equivalent_quantity, carbon_factors_row)
@@ -707,24 +703,41 @@ else:
 
                 elif sub_state["status"] == "DTS":
 
-                    st.data_editor(
+                    product_options = get_available_product_types(
+                        carbon_db.get("apparatus_output"), apparatus_name
+                    )
+
+                    edited = st.data_editor(
                         sub_state["table"],
                         use_container_width=True,
                         hide_index=True,
-                        disabled=True,
                         num_rows="fixed",
                         column_config={
-                            "Determination Type": st.column_config.TextColumn("Determination Type"),
-                            "Value": st.column_config.NumberColumn("Value"),
-                            "Product Type": st.column_config.TextColumn("Product Type"),
+                            "Determination Type": st.column_config.TextColumn(
+                                "Determination Type",
+                                disabled=True,
+                            ),
+                            "Value": st.column_config.NumberColumn(
+                                "Value",
+                                disabled=True,
+                            ),
+                            "Product Type": st.column_config.SelectboxColumn(
+                                "Product Type",
+                                options=product_options if product_options else ["No products found"],
+                                required=False,
+                            ),
                         },
                         key=f"table_dts_{selected}_{sub_name}",
                     )
 
+                    if not edited.equals(sub_state["table"]):
+                        st.session_state.test_categories[selected]["subcategories"][sub_name]["table"] = edited
+                        st.session_state.test_dirty = True
+
                 else:  # PBD
 
                     product_options = get_available_product_types(
-                        carbon_db.get("product_output"), apparatus_name
+                        carbon_db.get("apparatus_output"), apparatus_name
                     )
 
                     edited = st.data_editor(
