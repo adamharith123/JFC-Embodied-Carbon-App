@@ -3,7 +3,11 @@ import streamlit as st
 from utils.constants import APP_NAME, APP_VERSION, APP_STATUS, APP_SUBTITLE
 from utils.styles import apply_global_styles, render_header, render_footer
 from utils.session import initialise_session_state, load_databases_into_session
-from utils.database_loader import database_status_summary
+
+
+# ==========================================================
+# PAGE CONFIGURATION
+# ==========================================================
 
 st.set_page_config(
     page_title=APP_NAME,
@@ -18,93 +22,86 @@ initialise_session_state()
 if not st.session_state.get("databases_loaded", False):
     load_databases_into_session()
 
+
+# ==========================================================
+# HERO
+# ==========================================================
+
 render_header(
     title=APP_NAME,
     subtitle=APP_SUBTITLE,
     status=f"{APP_VERSION} · {APP_STATUS}",
 )
 
+
+# ==========================================================
+# WELCOME
+# ==========================================================
+
 st.markdown("## Welcome")
 
 st.markdown(
     """
-    This application estimates the upfront embodied carbon of fire safety systems in buildings.
+The **Fire Safety Embodied Carbon App** estimates the upfront embodied carbon
+of fire safety systems in buildings.
 
-    The tool is designed around three editable engineering databases:
-
-    - **Embodied Carbon Database**
-    - **Australian Standards / NCC Database**
-    - **Component Database**
-    """
+The application integrates engineering databases to automate fire safety
+system selection, apparatus quantification and embodied carbon assessment.
+"""
 )
 
 st.divider()
 
-st.markdown("## Application Workflow")
 
-st.markdown(
-    """
-    <div class="small-note">
-    <strong>Workflow:</strong> Building information → Standards database → Quantity estimation → Carbon database → Embodied carbon calculation → Dashboard → Report.
-    </div>
-    """,
-    unsafe_allow_html=True,
+# ==========================================================
+# ASSESSMENT METHODS
+# ==========================================================
+
+st.markdown("## Assessment Methods")
+
+col1, col2, col3 = st.columns(3, gap="large")
+
+with col1:
+    st.markdown(
+        """
+<div class="nav-card" style="text-align:center;">
+<h3>📘</h3>
+<h4>Deemed-to-Satisfy (DtS)</h4>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+with col2:
+    st.markdown(
+        """
+<div class="nav-card" style="text-align:center;">
+<h3>⚙️</h3>
+<h4>Performance Solution</h4>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+with col3:
+    st.markdown(
+        """
+<div class="nav-card" style="text-align:center;">
+<h3>🏢</h3>
+<h4>Existing Building</h4>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+st.markdown("")
+
+st.button(
+    "🔥 Start Fire Design Assessment",
+    type="primary",
+    use_container_width=True,
 )
 
-st.divider()
-
-st.markdown("## Database Status")
-
-status = database_status_summary()
-
-cols = st.columns(3)
-
-for col, (name, info) in zip(cols, status.items()):
-    with col:
-        if info["exists"]:
-            st.success(f"{name} loaded")
-        else:
-            st.warning(f"{name} missing")
-
-        st.caption(str(info["path"]))
-        st.metric("Sheets", len(info["sheets"]))
-        if "rows" in info:
-            st.metric("Rows detected", info["rows"])
-
-        if "apparatus" in info:
-            st.metric("Apparatus", info["apparatus"])
-
-        if "boq_rows" in info:
-            st.metric("BOQ Rows", info["boq_rows"])
-
-st.divider()
-
-st.markdown("## Assessment Pathways")
-
-c1, c2 = st.columns(2)
-
-with c1:
-    st.markdown(
-        """
-        <div class="nav-card">
-            <h3>🏢 Proposed New Design</h3>
-            <p>Estimate fire safety system quantities from building class, area, storeys and hazard classification.</p>
-            <p><strong>Status:</strong> Ready for Step 3</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with c2:
-    st.markdown(
-        """
-        <div class="nav-card">
-            <h3>📋 Existing Design</h3>
-            <p>Input known fire safety system quantities from plans, BOQs or asset registers.</p>
-            <p><strong>Status:</strong> Ready for Step 2</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 render_footer()
