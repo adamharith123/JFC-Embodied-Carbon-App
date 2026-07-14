@@ -334,3 +334,29 @@ def get_standards_list():
     """
 
     return load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE))["standards_list"]
+
+def get_building_class_applicability(building_class):
+    """
+    Returns a dict of {system_name: applicability_text} for a given
+    building class, read from the Building Class sheet.
+    """
+
+    df = load_standards_database()["building_class"]
+
+    if df.empty or not building_class:
+        return {}
+
+    first_col = df.columns[0]
+
+    match = df[df[first_col].astype(str).str.strip() == str(building_class).strip()]
+
+    if match.empty:
+        return {}
+
+    row = match.iloc[0]
+
+    return {
+        col.strip(): str(row[col]).strip()
+        for col in df.columns[1:]
+        if pd.notna(row[col])
+    }
