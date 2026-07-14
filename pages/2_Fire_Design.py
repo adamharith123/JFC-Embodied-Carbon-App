@@ -27,6 +27,25 @@ from utils.proposed_design_calculations import (
     calculate_sprinkler_pipework_default_length,
     default_linear_spacing_for_hazard,
 )
+from utils.standards_engine import get_parameter, calculate_quantity, get_available_condition_values
+from utils.database_loader import get_building_class_applicability
+
+from utils.proposed_design_calculations import (
+    calculate_equivalent_quantity,
+    calculate_component_carbon,
+    find_product_carbon_factors_row,
+    get_available_product_types,
+)
+from utils.standards_engine import (
+    get_parameter,
+    calculate_quantity,
+    get_available_condition_values,
+)
+from utils.database_loader import (
+    load_carbon_database,
+    get_building_classes,
+    get_building_class_applicability,
+)
 
 # ==========================================================
 # Page Configuration
@@ -220,13 +239,14 @@ CATEGORY_APPARATUS_MAP = {
 
 # Subcategories needing a UI/calculation shape different from the
 # default "simple" one. Anything not listed here defaults to "simple".
+# Only subcategories needing a UI/calculation shape different from
+# the default "simple" (N/A/DTS/PBD table) go here. Everything else
+# in CATEGORY_SUBCATEGORIES defaults to "simple" automatically.
 SUBCATEGORY_KIND = {
     (6, "Sprinkler Heads"): "sprinkler_heads",
     (6, "Sprinkler Pipework"): "sprinkler_pipework",
+    (4, "Hose Reel Pipework"): "manual_length",
     (3, "Emergency Luminaires"): "not_implemented",
-    (4, "Hose Reel Assemblies"): "not_implemented",
-    (4, "Hose Reel Pipework"): "not_implemented",
-    (4, "Portable Extinguishers"): "not_implemented",
 }
 
 
@@ -257,6 +277,85 @@ DEFAULT_DTS_FALLBACK = {"determination_type": "grid_spacing", "value": 10}
 
 
 def get_dts_default(cat_num, sub_name):
+    """
+    Returns {"determination_type": ..., "value": ...} used to
+    pre-fill a subcategory's table when DTS is selected.
+
+    For subcategories with a real AS-based formula in the calc_rules
+    sheet, this computes a live value from current Project
+    Information. Anything not listed here falls back to a generic
+    default (grid spacing of 10) as a placeholder.
+    """
+
+    info = st.session_state.get("test_project_info", {})
+    building_area = info.get("building_area")
+    storeys = info.get("building_storeys")
+    exits_per_storey = info.get("building_exits_per_storey")
+
+    if (cat_num, sub_name) == (1, "Smoke Detectors"):
+        coverage = get_parameter("detection", "smoke_detector", "coverage_area")
+        spacing = math.sqrt(coverage) if coverage else None
+        return {"determination_type": "grid_spacing", "value": round(spacing, 2) if spacing else 10}
+
+    if (cat_num, sub_name) == (1, "Heat Detectors"):
+        coverage = get_parameter("detection", "heat_detector", "coverage_area")
+        spacing = math.sqrt(coverage) if coverage else None
+        return {"determination_type": "grid_spacing", "value": round(spacing, 2) if spacing else 10}
+
+    if (cat_num, sub_name) == (1, "Aspirating Units"):
+        coverage = get_parameter("detection", "aspirating_detection", "coverage_area")
+        spacing = math.sqrt(coverage) if coverage else None
+        return {"determination_type": "grid_spacing", "value": round(spacing, 2) if spacing else 10}
+
+    if (cat_num, sub_name) == (1, "Manual Call Points"):
+        qty = calculate_quantity(
+            "detection", "manual_call_point", "count_formula",
+            {"storeys": storeys, "exits_per_storey": exits_per_storey},
+        )
+        return {"determination_type": "total_quantity", "value": qty if qty is not None else 0}
+
+    if (cat_num, sub_name) == (1, "Fire Indicator Panels"):
+        return {"determination_type": "total_quantity", "value": 1}
+
+    if (cat_num, sub_name) == (4, "Hose Reel Assemblies"):
+        area_per_storey = (building_area / storeys) if (building_area and storeys) else None
+        qty = calculate_quantity(
+            "hose_reel", "hose_reel", "quantity_formula",
+            {
+                "storeys": storeys,
+                "area_per_storey": area_per_storey,
+                "effective_area_per_reel": get_parameter("hose_reel", "hose_reel", "effective_area_per_reel"),
+            },
+        )
+        return {"determination_type": "total_quantity", "value": qty if qty is not None else 0}
+
+    if (cat_num, sub_name) == (4, "Hose Reel Cabinets"):
+        # Cabinets always equal the Hose Reel Assemblies count, per
+        # your note that these are definitionally equal.
+        hr_state = (
+            st.session_state.get("test_categories", {})
+            .get(4, {})
+            .get("subcategories", {})
+            .get("Hose Reel Assemblies")
+        )
+        hr_qty = None
+        if hr_state and not hr_state["table"].empty:
+            hr_qty = hr_state["table"].iloc[0].get("Value")
+        return {"determination_type": "total_quantity", "value": hr_qty if hr_qty is not None else 0}
+
+    if (cat_num, sub_name) == (4, "Portable Extinguishers"):
+        qty = calculate_quantity(
+            "extinguisher", "portable_extinguisher", "class_a_quantity_formula",
+            {
+                "storeys": storeys,
+                "floor_area": building_area,
+                "max_area_class_a": get_parameter(
+                    "extinguisher", "portable_extinguisher", "max_area_class_a_no_suppression"
+                ),
+            },
+        )
+        return {"determination_type": "total_quantity", "value": qty if qty is not None else 0}
+
     return DTS_DEFAULTS.get((cat_num, sub_name), DEFAULT_DTS_FALLBACK)
 
 
@@ -275,7 +374,7 @@ SPRINKLER_DETERMINATION_TYPES = {
 SPRINKLER_DETERMINATION_LABELS = {label: key for key, label in SPRINKLER_DETERMINATION_TYPES.items()}
 SPRINKLER_DETERMINATION_OPTIONS = list(SPRINKLER_DETERMINATION_TYPES.values())
 
-HAZARD_RATING_OPTIONS = ["Low", "Ordinary", "High"]
+HAZARD_RATING_OPTIONS = get_available_condition_values("sprinkler", "sprinkler_head", "spacing_area")
 
 PIPEWORK_MODE_OPTIONS = ["Default Formula", "Manual Override"]
 
@@ -312,13 +411,14 @@ def empty_sprinkler_heads_table():
 
 
 def sprinkler_heads_dts_table():
-    default_hazard = "Ordinary"
-    spacing = default_linear_spacing_for_hazard(default_hazard)
+    default_hazard = "Ordinary Hazard"
+    spacing_area = get_parameter("sprinkler", "sprinkler_head", "spacing_area", condition_value=default_hazard)
+    linear_spacing = math.sqrt(spacing_area) if spacing_area else None
     return pd.DataFrame(
         [{
             "Product Type": None,
             "Determination Type": SPRINKLER_DETERMINATION_TYPES["linear_spacing"],
-            "Value": round(spacing, 2),
+            "Value": round(linear_spacing, 2) if linear_spacing else None,
             "Hazard Rating": default_hazard,
         }]
     )
@@ -350,6 +450,13 @@ def blank_subcategory_state(cat_num, sub_name):
         return {
             "expanded": False,
             "mode": "Default Formula",
+            "product_type": None,
+            "manual_value": None,
+        }
+
+    if kind == "manual_length":
+        return {
+            "expanded": False,
             "product_type": None,
             "manual_value": None,
         }
@@ -663,6 +770,7 @@ if st.session_state.test_step == 1:
                     "building_storeys": None,
                     "building_floor_to_floor_height": None,
                     "building_risers": None,
+                    "building_exits_per_storey": None,
                 }
 
                 st.session_state.test_categories = load_categories_from_design_rows(design_rows)
@@ -691,7 +799,7 @@ if st.session_state.test_step == 1:
 
         with st.expander("Additional Building Inputs (used by some systems)"):
 
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
                 building_storeys = st.number_input(
@@ -715,6 +823,14 @@ if st.session_state.test_step == 1:
                     min_value=0,
                     step=1,
                     key="test_building_risers",
+                )
+
+            with col4:
+                building_exits_per_storey = st.number_input(
+                    "Number of Exits per Storey",
+                    min_value=0,
+                    step=1,
+                    key="test_building_exits_per_storey",
                 )
 
         version_notes = st.text_area(
@@ -747,6 +863,7 @@ if st.session_state.test_step == 1:
                     "building_storeys": building_storeys,
                     "building_floor_to_floor_height": building_floor_to_floor_height,
                     "building_risers": building_risers,
+                    "building_exits_per_storey": building_exits_per_storey,
                 }
 
                 st.session_state.test_categories = fresh_categories()
@@ -881,7 +998,16 @@ else:
 
                         det_key = SPRINKLER_DETERMINATION_LABELS.get(determination_label)
 
-                        quantity = calculate_sprinkler_head_quantity(det_key, input_value, building_area_m2)
+                        if det_key == "quantity":
+                            quantity = input_value
+                        else:  # linear_spacing
+                            quantity = calculate_quantity(
+                                "sprinkler", "sprinkler_head", "quantity_formula",
+                                {
+                                    "protected_area": building_area_m2,
+                                    "spacing_area": (input_value ** 2) if input_value else None,
+                                },
+                            )
 
                         if quantity is None:
                             warnings.append(
@@ -944,25 +1070,25 @@ else:
 
                     else:  # Default Formula
 
-                        spacing = effective_linear_spacing_m
-                        if spacing is None and total_sprinkler_head_quantity > 0 and building_area_m2:
-                            spacing = math.sqrt(building_area_m2 / total_sprinkler_head_quantity)
+                        variables = {
+                            "risers": info.get("building_risers") or get_parameter("sprinkler", "pipework", "default_risers"),
+                            "storeys": info.get("building_storeys"),
+                            "floor_to_floor_height": info.get("building_floor_to_floor_height"),
+                            "protected_area": building_area_m2,
+                            "spacing_area": (effective_linear_spacing_m ** 2) if effective_linear_spacing_m else None,
+                        }
 
-                        length_m = calculate_sprinkler_pipework_default_length(
-                            info.get("building_risers"),
-                            info.get("building_storeys"),
-                            info.get("building_floor_to_floor_height"),
-                            total_sprinkler_head_quantity,
-                            building_area_m2,
-                            spacing,
-                        )
+                        vertical = calculate_quantity("sprinkler", "pipework", "vertical_riser_formula", variables)
+                        horizontal = calculate_quantity("sprinkler", "pipework", "horizontal_pipe_formula", variables)
 
-                        if length_m is None:
+                        if vertical is None or horizontal is None:
                             warnings.append(
                                 f"{sub_name}: insufficient inputs to compute the default formula "
                                 f"(check Risers, Storeys, Floor-to-Floor Height, and Sprinkler Heads)."
                             )
                             continue
+
+                        length_m = vertical + horizontal
 
                     carbon_factors_row = find_product_carbon_factors_row(
                         apparatus_output_df, "Sprinkler Pipework", product_type_name
@@ -971,6 +1097,44 @@ else:
                     if carbon_factors_row is None:
                         warnings.append(
                             f"{sub_name}: Product Type '{product_type_name}' not found for 'Sprinkler Pipework'."
+                        )
+                        continue
+
+                    carbon_result = calculate_component_carbon(length_m, carbon_factors_row)
+
+                    results.append({
+                        "Apparatus": sub_name,
+                        "Product Type": product_type_name,
+                        "Quantity": length_m,
+                        "A1-A3": carbon_result["A1-A3"],
+                        "A4": carbon_result["A4"],
+                        "A5": carbon_result["A5"],
+                        "Total": carbon_result["Total"],
+                    })
+
+                # ------------------------------------------------
+                # Manual Length (Hose Reel Pipework)
+                # ------------------------------------------------
+                elif kind == "manual_length":
+
+                    product_type_name = sub_state.get("product_type")
+                    length_m = sub_state.get("manual_value")
+
+                    if not isinstance(product_type_name, str) or not product_type_name.strip():
+                        warnings.append(f"{sub_name}: no Product Type selected - not included.")
+                        continue
+
+                    if not length_m or length_m <= 0:
+                        warnings.append(f"{sub_name}: enter a length greater than 0.")
+                        continue
+
+                    carbon_factors_row = find_product_carbon_factors_row(
+                        apparatus_output_df, apparatus_name, product_type_name
+                    )
+
+                    if carbon_factors_row is None:
+                        warnings.append(
+                            f"{sub_name}: Product Type '{product_type_name}' not found for '{apparatus_name}'."
                         )
                         continue
 
@@ -1041,6 +1205,17 @@ else:
                         "Category": cat_name, "Subcategory": sub_name,
                         "Status": sub_state.get("mode"),
                         "Determination Type": sub_state.get("mode"),
+                        "Value": sub_state.get("manual_value"),
+                        "Product Type": sub_state.get("product_type"),
+                        "Hazard Rating": None,
+                    })
+
+                elif kind == "manual_length":
+
+                    rows.append({
+                        "Category": cat_name, "Subcategory": sub_name,
+                        "Status": "Manual",
+                        "Determination Type": "Manual",
                         "Value": sub_state.get("manual_value"),
                         "Product Type": sub_state.get("product_type"),
                         "Hazard Rating": None,
@@ -1120,7 +1295,7 @@ else:
 
         st.write("You have unsaved changes to this design. Save them before leaving, or discard them?")
 
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
 
         with col1:
             if st.button("💾 Save", use_container_width=True):
@@ -1158,6 +1333,13 @@ else:
         f"**{info['project_name']}** · Version {st.session_state.test_editing_version_number}{editing_tag} · "
         f"{info['building_area']:,.0f} m² · {info['building_class']}"
     )
+
+    applicability = get_building_class_applicability(info.get("building_class"))
+
+    if applicability:
+        with st.expander("ℹ️ NCC Building Class Applicability"):
+            for system_name, requirement in applicability.items():
+                st.caption(f"**{system_name}**: {requirement}")
 
     back = st.button("← Back to Project Information")
 
@@ -1327,8 +1509,60 @@ else:
                             "on the Project Information page, plus at least one Sprinkler Head "
                             "row configured."
                         )
+                        st.caption(
+                            "⚠️ This default formula is an early-stage geometric approximation, "
+                            "not a cited AS clause. Verify before relying on it for design."
+                        )
 
                     st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                continue
+            if kind == "manual_length":
+
+                arrow_col, name_col = st.columns([0.5, 4])
+
+                with arrow_col:
+                    arrow_label = "▼" if sub_state["expanded"] else "▶"
+                    toggle_expand = st.button(arrow_label, key=f"expand_btn_{selected}_{sub_name}")
+
+                with name_col:
+                    st.markdown(f"**{sub_name}**")
+
+                if toggle_expand:
+                    sub_state["expanded"] = not sub_state["expanded"]
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+
+                if sub_state["expanded"]:
+
+                    product_options = get_available_product_types(
+                        carbon_db.get("apparatus_output"), apparatus_name
+                    )
+
+                    new_product = st.selectbox(
+                        "Product Type",
+                        ["(none selected)"] + product_options,
+                        index=(
+                            (["(none selected)"] + product_options).index(sub_state.get("product_type"))
+                            if sub_state.get("product_type") in product_options else 0
+                        ),
+                        key=f"manual_product_{selected}_{sub_name}",
+                    )
+
+                    new_value = st.number_input(
+                        "Length (m)",
+                        min_value=0.0,
+                        step=1.0,
+                        value=float(sub_state.get("manual_value") or 0.0),
+                        key=f"manual_value_{selected}_{sub_name}",
+                    )
+
+                    resolved_product = None if new_product == "(none selected)" else new_product
+
+                    if resolved_product != sub_state.get("product_type") or new_value != sub_state.get("manual_value"):
+                        sub_state["product_type"] = resolved_product
+                        sub_state["manual_value"] = new_value
+                        st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                        st.session_state.test_dirty = True
 
                 continue
 
