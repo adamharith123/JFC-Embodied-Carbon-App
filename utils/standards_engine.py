@@ -143,7 +143,7 @@ def _validate_ast(node):
 
 def evaluate_formula(formula_string, variables):
     """
-    Evaluates a formula string (e.g. "=risers * storeys * height")
+    Evaluates a formula string (e.g. "FORMULA: risers * storeys * height")
     against a dict of variable values. Returns None if any required
     variable is missing or zero/blank, since most of these formulas
     are meaningless with an incomplete input set.
@@ -151,10 +151,10 @@ def evaluate_formula(formula_string, variables):
     variables : dict mapping lowercase variable names to numbers
     """
 
-    if not isinstance(formula_string, str) or not formula_string.startswith("="):
+    if not isinstance(formula_string, str) or not formula_string.startswith("FORMULA:"):
         return formula_string  # not a formula, just a plain value
 
-    expression = formula_string[1:].strip()
+    expression = formula_string[len("FORMULA:"):].strip()
 
     try:
         tree = ast.parse(expression, mode="eval")
@@ -192,3 +192,45 @@ def calculate_quantity(system, component, parameter, variables, condition_value=
     if raw is None:
         return None
     return evaluate_formula(raw, variables)
+
+def get_extinguisher_requirement(hazard_class, fire_class, has_fixed_suppression):
+    """
+    Returns the minimum acceptable rating and its corresponding
+    max-area coverage for a given hazard/fire class/suppression
+    combination, read straight from the AS2444 tables in calc_rules.
+
+    fire_class : "A" or "B"
+    Returns a dict: {"min_rating": ..., "max_area": ..., "travel_distance": ...}
+    or None if no matching row exists.
+    """
+
+    min_rating = get_parameter(
+        "extinguisher", "portable_extinguisher",
+        f"min_rating_class_{fire_class.lower()}",
+        condition_value=hazard_class,
+    )
+
+    if min_rating is None:
+        return None
+
+    suppression_suffix = "with_suppression" if has_fixed_suppression else "no_suppression"
+
+    max_area = get_parameter(
+        "extinguisher", "portable_extinguisher",
+        f"max_area_class_{fire_class.lower()}_{suppression_suffix}",
+        condition_value=f"{hazard_class}|{min_rating}",
+    )
+
+    travel_distance = None
+    if fire_class.upper() == "B" and not has_fixed_suppression:
+        travel_distance = get_parameter(
+            "extinguisher", "portable_extinguisher",
+            "travel_distance_class_b_no_suppression",
+            condition_value=f"{hazard_class}|{min_rating}",
+        )
+
+    return {
+        "min_rating": min_rating,
+        "max_area": max_area,
+        "travel_distance": travel_distance,
+    }

@@ -40,6 +40,7 @@ from utils.standards_engine import (
     get_parameter,
     calculate_quantity,
     get_available_condition_values,
+    get_extinguisher_requirement,
 )
 from utils.database_loader import (
     load_carbon_database,
@@ -247,6 +248,7 @@ SUBCATEGORY_KIND = {
     (6, "Sprinkler Pipework"): "sprinkler_pipework",
     (4, "Hose Reel Pipework"): "manual_length",
     (3, "Emergency Luminaires"): "not_implemented",
+    (4, "Portable Extinguishers"): "extinguisher",
 }
 
 
@@ -460,6 +462,19 @@ def blank_subcategory_state(cat_num, sub_name):
             "product_type": None,
             "manual_value": None,
         }
+    
+    if kind == "extinguisher":
+        return {
+            "status": "N/A",
+            "expanded": False,
+            "hazard_class": "Ordinary",
+            "fire_class_a": True,
+            "fire_class_b": False,
+            "has_fixed_suppression": False,
+            "electronics_present": False,
+            "product_type": None,
+            "quantity_override": None,
+        }
 
     # "simple" and "not_implemented" share the same state shape
     return {
@@ -483,8 +498,10 @@ def fresh_categories():
 
 def get_subcategory_color_status(cat_num, sub_name, sub_state):
     kind = get_subcategory_kind(cat_num, sub_name)
-    if kind == "sprinkler_pipework":
+    if kind in ("sprinkler_pipework", "manual_length"):
         return "PBD" if sub_state.get("product_type") else "N/A"
+    if kind == "extinguisher":
+        return sub_state.get("status", "N/A")
     if kind == "not_implemented":
         return "N/A"
     return sub_state.get("status", "N/A")
@@ -1150,6 +1167,85 @@ else:
                         "Total": carbon_result["Total"],
                     })
 
+                elif kind == "extinguisher":
+
+                    if sub_state["status"] == "N/A":
+                        continue
+
+                    product_type_name = sub_state.get("product_type")
+
+                    if not isinstance(product_type_name, str) or not product_type_name.strip():
+                        warnings.append(f"{sub_name}: no Product Type selected - not included.")
+                        continue
+
+                    quantity = None
+
+                    if sub_state["status"] == "PBD" and sub_state.get("quantity_override"):
+                        quantity = sub_state["quantity_override"]
+
+                    else:
+
+                        candidate_quantities = []
+
+                        if sub_state.get("fire_class_a"):
+                            req_a = get_extinguisher_requirement(
+                                sub_state["hazard_class"], "A", sub_state["has_fixed_suppression"]
+                            )
+                            if req_a and req_a["max_area"]:
+                                qty_a = calculate_quantity(
+                                    "extinguisher", "portable_extinguisher", "quantity_formula",
+                                    {"storeys": info.get("building_storeys"), "floor_area": building_area_m2,
+                                     "max_area": req_a["max_area"]},
+                                )
+                                if qty_a is not None:
+                                    candidate_quantities.append(qty_a)
+
+                        if sub_state.get("fire_class_b"):
+                            req_b = get_extinguisher_requirement(
+                                sub_state["hazard_class"], "B", sub_state["has_fixed_suppression"]
+                            )
+                            if req_b and req_b["max_area"]:
+                                qty_b = calculate_quantity(
+                                    "extinguisher", "portable_extinguisher", "quantity_formula",
+                                    {"storeys": info.get("building_storeys"), "floor_area": building_area_m2,
+                                     "max_area": req_b["max_area"]},
+                                )
+                                if qty_b is not None:
+                                    candidate_quantities.append(qty_b)
+
+                        if candidate_quantities:
+                            # Conservative approach: use whichever class requires more
+                            # extinguishers, rather than assuming dual-rated units.
+                            quantity = max(candidate_quantities)
+
+                    if quantity is None or quantity <= 0:
+                        warnings.append(
+                            f"{sub_name}: insufficient inputs to calculate a quantity "
+                            f"(check Building Area, Storeys, and at least one Fire Class selected)."
+                        )
+                        continue
+
+                    carbon_factors_row = find_product_carbon_factors_row(
+                        apparatus_output_df, apparatus_name, product_type_name
+                    )
+
+                    if carbon_factors_row is None:
+                        warnings.append(
+                            f"{sub_name}: Product Type '{product_type_name}' not found for '{apparatus_name}'."
+                        )
+                        continue
+
+                    carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
+
+                    results.append({
+                        "Apparatus": sub_name,
+                        "Product Type": product_type_name,
+                        "Quantity": quantity,
+                        "A1-A3": carbon_result["A1-A3"],
+                        "A4": carbon_result["A4"],
+                        "A5": carbon_result["A5"],
+                        "Total": carbon_result["Total"],
+                    })
                 # ------------------------------------------------
                 # "not_implemented" kind - skipped silently
                 # ------------------------------------------------
@@ -1219,6 +1315,20 @@ else:
                         "Value": sub_state.get("manual_value"),
                         "Product Type": sub_state.get("product_type"),
                         "Hazard Rating": None,
+                    })
+
+                elif kind == "extinguisher":
+
+                    rows.append({
+                        "Category": cat_name, "Subcategory": sub_name,
+                        "Status": sub_state.get("status", "N/A"),
+                        "Determination Type": f"Hazard: {sub_state.get('hazard_class')}, "
+                                               f"Class A: {sub_state.get('fire_class_a')}, "
+                                               f"Class B: {sub_state.get('fire_class_b')}, "
+                                               f"Suppression: {sub_state.get('has_fixed_suppression')}",
+                        "Value": sub_state.get("quantity_override"),
+                        "Product Type": sub_state.get("product_type"),
+                        "Hazard Rating": sub_state.get("hazard_class"),
                     })
 
                 else:
@@ -1563,6 +1673,153 @@ else:
                         sub_state["manual_value"] = new_value
                         st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
                         st.session_state.test_dirty = True
+
+                continue
+            if kind == "extinguisher":
+
+                arrow_col, name_col, toggle_col = st.columns([0.5, 2, 3])
+
+                with arrow_col:
+                    arrow_label = "▼" if sub_state["expanded"] else "▶"
+                    toggle_expand = st.button(arrow_label, key=f"expand_btn_{selected}_{sub_name}")
+
+                with name_col:
+                    st.markdown(f"**{sub_name}**")
+
+                with toggle_col:
+                    new_status = st.radio(
+                        "Determination Method", ["N/A", "DTS", "PBD"],
+                        index=["N/A", "DTS", "PBD"].index(sub_state["status"]),
+                        horizontal=True,
+                        key=f"status_toggle_{selected}_{sub_name}",
+                        label_visibility="collapsed",
+                    )
+
+                if toggle_expand:
+                    sub_state["expanded"] = not sub_state["expanded"]
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+
+                if new_status != sub_state["status"]:
+                    sub_state["status"] = new_status
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.session_state.test_dirty = True
+                    st.rerun()
+
+                if sub_state["expanded"]:
+
+                    if sub_state["status"] == "N/A":
+
+                        st.caption("The embodied carbon for this system is not considered.")
+
+                    else:
+
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            new_hazard = st.selectbox(
+                                "Hazard Classification", ["Light", "Ordinary", "High"],
+                                index=["Light", "Ordinary", "High"].index(sub_state["hazard_class"]),
+                                key=f"ext_hazard_{selected}_{sub_name}",
+                            )
+                            new_class_a = st.checkbox(
+                                "Class A Fire Risk Present", value=sub_state["fire_class_a"],
+                                key=f"ext_class_a_{selected}_{sub_name}",
+                            )
+                            new_class_b = st.checkbox(
+                                "Class B Fire Risk Present", value=sub_state["fire_class_b"],
+                                key=f"ext_class_b_{selected}_{sub_name}",
+                            )
+
+                        with col2:
+                            new_suppression = st.checkbox(
+                                "Fixed Automatic Fire Suppression Present in This Area",
+                                value=sub_state["has_fixed_suppression"],
+                                key=f"ext_suppression_{selected}_{sub_name}",
+                            )
+                            new_electronics = st.checkbox(
+                                "Electrical / Electronics Equipment Present (aggravating factor)",
+                                value=sub_state["electronics_present"],
+                                key=f"ext_electronics_{selected}_{sub_name}",
+                            )
+
+                        for key, new_val in [
+                            ("hazard_class", new_hazard), ("fire_class_a", new_class_a),
+                            ("fire_class_b", new_class_b), ("has_fixed_suppression", new_suppression),
+                            ("electronics_present", new_electronics),
+                        ]:
+                            if sub_state[key] != new_val:
+                                sub_state[key] = new_val
+                                st.session_state.test_dirty = True
+
+                        # ---- Compute and display the requirement warning ----
+
+                        requirement_lines = []
+
+                        if new_class_a:
+                            req_a = get_extinguisher_requirement("Ordinary" if new_hazard == "Ordinary" else new_hazard, "A", new_suppression)
+                            req_a = get_extinguisher_requirement(new_hazard, "A", new_suppression)
+                            if req_a:
+                                requirement_lines.append(
+                                    f"Class A: minimum rating **{req_a['min_rating']}** "
+                                    f"(covers up to {req_a['max_area']:,.0f} m² per extinguisher)"
+                                )
+
+                        if new_class_b:
+                            req_b = get_extinguisher_requirement(new_hazard, "B", new_suppression)
+                            if req_b:
+                                travel_note = f", travel distance {req_b['travel_distance']} m" if req_b["travel_distance"] else ""
+                                requirement_lines.append(
+                                    f"Class B: minimum rating **{req_b['min_rating']}** "
+                                    f"(covers up to {req_b['max_area']:,.0f} m² per extinguisher{travel_note})"
+                                )
+
+                        if new_electronics:
+                            requirement_lines.append(
+                                "Electronics/electrical equipment present: an **(E)-rated** "
+                                "extinguisher is additionally required for use on live electrical equipment."
+                            )
+
+                        if requirement_lines:
+                            st.warning(
+                                "**Minimum extinguisher requirement for this circumstance:**\n\n"
+                                + "\n\n".join(f"- {line}" for line in requirement_lines)
+                                + "\n\nThis cannot be automatically verified against the selected "
+                                "Product Type below - please confirm the chosen product meets or "
+                                "exceeds these ratings."
+                            )
+
+                        # ---- Product Type + quantity ----
+
+                        product_options = get_available_product_types(
+                            carbon_db.get("apparatus_output"), apparatus_name
+                        )
+
+                        new_product = st.selectbox(
+                            "Product Type", ["(none selected)"] + product_options,
+                            index=(
+                                (["(none selected)"] + product_options).index(sub_state.get("product_type"))
+                                if sub_state.get("product_type") in product_options else 0
+                            ),
+                            key=f"ext_product_{selected}_{sub_name}",
+                        )
+                        resolved_product = None if new_product == "(none selected)" else new_product
+                        if resolved_product != sub_state.get("product_type"):
+                            sub_state["product_type"] = resolved_product
+                            st.session_state.test_dirty = True
+
+                        if sub_state["status"] == "PBD":
+                            new_override = st.number_input(
+                                "Quantity Override (optional - leave 0 to use calculated quantity)",
+                                min_value=0, step=1,
+                                value=int(sub_state.get("quantity_override") or 0),
+                                key=f"ext_override_{selected}_{sub_name}",
+                            )
+                            if new_override != sub_state.get("quantity_override"):
+                                sub_state["quantity_override"] = new_override
+                                st.session_state.test_dirty = True
+
+                        st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
 
                 continue
 
