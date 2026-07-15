@@ -166,7 +166,8 @@ else:
 
 st.divider()
 
-st.subheader("Underlying Numbers")
+st.subheader("Category Breadown Table")
+
 
 st.dataframe(
     category_totals_df.sort_values("Category"),
