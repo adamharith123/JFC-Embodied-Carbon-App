@@ -117,7 +117,7 @@ def _component_quantity(spec, comp_state):
     return None
 
 
-def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, key_prefix=""):
+def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, key_prefix="", show_label=True):
     """
     Renders the widgets for a single component and mutates comp_state
     in place. Returns True if anything changed.
@@ -193,7 +193,8 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
         return dirty
 
-    st.markdown(f"**{spec['label']}**")
+    if show_label:
+        st.markdown(f"**{spec['label']}**")
 
     if kind == KIND_QUANTITY:
 
@@ -468,6 +469,36 @@ def calculate_component(spec, comp_state, apparatus_output_df, building_area_m2=
         "Total": carbon_result["Total"],
     }
 
+def render_single_component(spec, state, apparatus_output_df, key_prefix):
+    """
+    Renders one standalone component directly under its own nav entry
+    - for subcategories that don't need a group wrapper (e.g. "Fire-
+    Resistant Mastic" on its own, rather than several components
+    under one dropdown). state = {"expanded": bool, "component": {...}}.
+    """
+
+    arrow_col, name_col = st.columns([0.5, 4])
+
+    with arrow_col:
+        arrow_label = "▼" if state["expanded"] else "▶"
+        toggle_expand = st.button(arrow_label, key=f"{key_prefix}_expand")
+
+    with name_col:
+        st.markdown(f"**{spec['label']}**")
+
+    if toggle_expand:
+        state["expanded"] = not state["expanded"]
+        return "toggled"
+
+    dirty = False
+
+    if state["expanded"]:
+        dirty = render_component(
+            spec, state["component"], apparatus_output_df,
+            parent_quantity=None, key_prefix=key_prefix, show_label=False,
+        )
+
+    return dirty
 
 def calculate_component_group(specs, group_state, apparatus_output_df, building_area_m2=None, warnings=None):
     """

@@ -45,8 +45,10 @@ from utils.standards_engine import (
 from utils.component_groups import (
     component_spec,
     init_group_state,
+    init_component_state,
     render_component,
     render_component_group,
+    render_single_component,
     calculate_component,
     calculate_component_group,
     component_group_design_rows,
@@ -137,14 +139,9 @@ CATEGORY_SUBCATEGORIES = {
         "Hose Reels", "Portable Extinguishers",
     ],
     5: [
-        "Plasterboard Wall Assemblies", "Speed Panel Wall Assemblies",
-        "Masonry Wall Assemblies", "Concrete Wall Assemblies",
-        "Fire-Resistant Mastic", "Fire Batts", "Fire-Stop Mortar",
-        "Intumescent Collars", "Intumescent Pipe Wraps",
-        "Fire-Resistant Joint Seals", "Fire and Smoke Dampers",
-        "Applied Structural Fire Protection", "Fire Doors", "Smoke Doors",
-        "Non-Fire-Rated Doors", "Fire Resistant Glazing",
-        "Heat Strengthened Glazing", "Fire Shutters", "Fire Curtains",
+        "Wall Assemblies", "Doors and Glazing", "Pipework Protection",
+        "Fire-Resistant Mastic", "Fire-Stop Mortar", "Fire and Smoke Dampers",
+        "Applied Structural Fire Protection", "Fire Shutters", "Fire Curtains",
     ],
     6: [
         "Sprinklers", "Hydrants",
@@ -305,6 +302,31 @@ GROUP_DEFINITIONS = {
                        parent_key="visual_alarm_devices"),
     ],
 
+    (5, "Wall Assemblies"): [
+        component_spec("plasterboard", "Plasterboard Wall Assembly", "Plasterboard Wall Assembly", KIND_AREA),
+        component_spec("speed_panel", "Speed Panel Wall Assembly", "Speed Panel Wall Assembly", KIND_AREA),
+        component_spec("masonry", "Masonry Wall Assembly", "Masonry Wall Assembly", KIND_AREA),
+        component_spec("concrete", "Concrete Wall Assembly", "Concrete Wall Assembly", KIND_AREA),
+        component_spec("fire_batts", "Fire Batts", "Fire Batt", KIND_AREA),
+    ],
+
+    (5, "Doors and Glazing"): [
+        component_spec("fire_doors", "Fire Doors", "Fire Door", KIND_QUANTITY, unit_label="doors"),
+        component_spec("smoke_doors", "Smoke Doors", "Smoke Door", KIND_QUANTITY, unit_label="doors"),
+        component_spec("non_fire_rated_doors", "Non-Fire-Rated Doors", "Non-Fire-Rated Door", KIND_QUANTITY, unit_label="doors"),
+        component_spec("fire_resistant_glazing", "Fire Resistant Glazing", "Fire Resistant Glazing", KIND_AREA),
+        component_spec("heat_strengthened_glazing", "Heat Strengthened Glazing", "Heat Strengthened Glazing", KIND_AREA),
+    ],
+
+    (5, "Pipework Protection"): [
+        component_spec("intumescent_collars", "Intumescent Collars", "Intumescent Collar", KIND_QUANTITY, unit_label="collars",
+                       disclaimer="Ensure the selected product's size is suitable for the actual pipe diameter being protected."),
+        component_spec("fire_resistant_joint_seals", "Fire-Resistant Joint Seals", "Fire-Resistant Joint Seal", KIND_QUANTITY, unit_label="seals",
+                       disclaimer="Ensure the selected product's size is suitable for the actual joint/pipe size being protected."),
+        component_spec("intumescent_pipe_wraps", "Intumescent Pipe Wraps", "Intumescent Pipe Wrap", KIND_LENGTH,
+                       disclaimer="Ensure the selected product's size is suitable for the actual pipe diameter being wrapped."),
+    ],
+
     (6, "Hydrants"): [
         component_spec("hydrant_valves", "Hydrant Valves", "Hydrant Valve", KIND_QUANTITY, unit_label="valves",
                        disclaimer="A reference formula exists in the Standards Calc Database (Risers × Storeys × "
@@ -315,6 +337,56 @@ GROUP_DEFINITIONS = {
                        disclaimer="Typically 1 booster assembly per hydrant system - confirm against site layout and AS2419.1."),
         component_spec("hydrant_pumps", "Hydrant Pumps", "Hydrant Pump", KIND_QUANTITY, unit_label="pumps"),
     ],
+}
+
+# ==========================================================
+# Single Component Definitions
+# ==========================================================
+# For subcategories that are just ONE component with no group
+# wrapper needed - e.g. a standalone "Fire-Resistant Mastic" entry.
+
+SINGLE_COMPONENT_DEFINITIONS = {
+
+    (5, "Fire-Resistant Mastic"): component_spec(
+        "mastic", "Fire-Resistant Mastic", "Fire-Resistant Mastic", KIND_MASS_VOLUME
+    ),
+    (5, "Fire-Stop Mortar"): component_spec(
+        "mortar", "Fire-Stop Mortar", "Fire-Stop Mortar", KIND_MASS_VOLUME
+    ),
+    (5, "Fire and Smoke Dampers"): component_spec(
+        "dampers", "Fire and Smoke Dampers", "Fire and Smoke Damper", KIND_QUANTITY, unit_label="dampers",
+        disclaimer="Ensure the selected product's size is suitable for the actual duct size being protected.",
+    ),
+    (5, "Applied Structural Fire Protection"): component_spec(
+        "applied_protection", "Applied Structural Fire Protection", "Applied Structural Fire Protection", KIND_AREA
+    ),
+    (5, "Fire Shutters"): component_spec(
+        "shutters", "Fire Shutters", "Fire Shutter", KIND_AREA
+    ),
+    (5, "Fire Curtains"): component_spec(
+        "curtains", "Fire Curtains", "Fire Curtain", KIND_AREA
+    ),
+    (7, "Smoke Exhaust Fans"): component_spec(
+        "smoke_exhaust_fans", "Smoke Exhaust Fans", "Smoke Exhaust Fan", KIND_QUANTITY, unit_label="fans"
+    ),
+    (7, "Fire Resistant Ductwork"): component_spec(
+        "fire_resistant_ductwork", "Fire Resistant Ductwork", "Fire Resistant Ductwork", KIND_LENGTH,
+        disclaimer="Ensure the selected product matches the desired duct size.",
+    ),
+    (7, "Regular Sheet Metal Ductwork"): component_spec(
+        "regular_ductwork", "Regular Sheet Metal Ductwork", "Regular Sheet Metal Ductwork", KIND_LENGTH,
+        disclaimer="Ensure the selected product matches the desired duct size.",
+    ),
+    (8, "Fire Control Centre"): component_spec(
+        "fire_control_centre", "Fire Control Centre", "Fire Control Centre", KIND_QUANTITY, unit_label="centres"
+    ),
+    (9, "Fire Safety Signage"): component_spec(
+        "fire_safety_signage", "Fire Safety Signage", "Fire Safety Signage", KIND_QUANTITY, unit_label="signs"
+    ),
+    (9, "Evacuation Diagram Systems"): component_spec(
+        "evacuation_diagrams", "Evacuation Diagram Systems", "Evacuation Diagram System", KIND_QUANTITY, unit_label="systems"
+    ),
+
 }
 
 # Subcategories needing a UI/calculation shape different from the
@@ -328,12 +400,28 @@ SUBCATEGORY_KIND = {
     (2, "Cabling"): "component_group",
     (2, "EWIS Panels"): "component_group",
     (2, "Visual Alarm Devices"): "component_group",
+    (5, "Wall Assemblies"): "component_group",
+    (5, "Doors and Glazing"): "component_group",
+    (5, "Pipework Protection"): "component_group",
+    (5, "Fire-Resistant Mastic"): "single_component",
+    (5, "Fire-Stop Mortar"): "single_component",
+    (5, "Fire and Smoke Dampers"): "single_component",
+    (5, "Applied Structural Fire Protection"): "single_component",
+    (5, "Fire Shutters"): "single_component",
+    (5, "Fire Curtains"): "single_component",
     (6, "Sprinklers"): "sprinkler_group",
     (6, "Hydrants"): "component_group",
+    (7, "Smoke Exhaust Fans"): "single_component",
+    (7, "Fire Resistant Ductwork"): "single_component",
+    (7, "Regular Sheet Metal Ductwork"): "single_component",
+    (8, "Fire Control Centre"): "single_component",
     (4, "Hose Reel Pipework"): "manual_length",
     (3, "Emergency Luminaires"): "not_implemented",
     (4, "Portable Extinguishers"): "extinguisher",
     (4, "Hose Reels"): "component_group",
+    (9, "Fire Safety Signage"): "single_component",
+    (9, "Evacuation Diagram Systems"): "single_component",
+    (9, "Fire Equipment Identification Signs"): "identification_signs",
     (10, "Data-Centre Gaseous Suppression Systems"): "unavailable",
     (10, "Battery Energy Storage Fire Protection Systems"): "unavailable",
     (10, "Commercial Kitchen Suppression Systems"): "unavailable",
@@ -563,6 +651,20 @@ def blank_subcategory_state(cat_num, sub_name):
     if kind == "component_group":
         return init_group_state(GROUP_DEFINITIONS[(cat_num, sub_name)])
     
+    if kind == "single_component":
+        spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
+        return {"expanded": False, "component": init_component_state(spec)}
+
+    if kind == "identification_signs":
+        return {
+            "expanded": False,
+            "count_extinguishers": True,
+            "count_hose_reels": True,
+            "count_hydrants_boosters": True,
+            "manual_quantity": None,
+            "product_type": None,
+        }
+    
     if kind == "extinguisher":
         return {
             "status": "N/A",
@@ -628,6 +730,16 @@ def get_subcategory_color_status(cat_num, sub_name, sub_state):
             for comp in sub_state.get("components", {}).values()
         )
         return "PBD" if has_any_data else "N/A"
+    if kind == "single_component":
+        comp = sub_state.get("component", {})
+        return "PBD" if (comp.get("value") or comp.get("included")) else "N/A"
+    if kind == "identification_signs":
+        any_checked = (
+            sub_state.get("count_extinguishers")
+            or sub_state.get("count_hose_reels")
+            or sub_state.get("count_hydrants_boosters")
+        )
+        return "PBD" if (any_checked or sub_state.get("manual_quantity")) else "N/A"
     if kind in ("not_implemented", "unavailable"):
         return "N/A"
     return sub_state.get("status", "N/A")
@@ -1464,6 +1576,60 @@ else:
 
                     results.extend(group_results)
 
+                elif kind == "single_component":
+
+                    spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
+
+                    result = calculate_component(
+                        spec, sub_state["component"], apparatus_output_df,
+                        building_area_m2=building_area_m2, warnings=warnings,
+                    )
+
+                    if result:
+                        results.append(result)
+
+                elif kind == "identification_signs":
+
+                    product_type_name = sub_state.get("product_type")
+
+                    auto_count = 0
+                    if sub_state.get("count_extinguishers"):
+                        auto_count += sum(r["Quantity"] for r in results if r["Apparatus"] == "Portable Extinguishers")
+                    if sub_state.get("count_hose_reels"):
+                        auto_count += sum(r["Quantity"] for r in results if r["Apparatus"] == "Hose Reel Assembly")
+                    if sub_state.get("count_hydrants_boosters"):
+                        auto_count += sum(
+                            r["Quantity"] for r in results if r["Apparatus"] in ("Hydrant Valves", "Hydrant Boosters")
+                        )
+
+                    manual_qty = sub_state.get("manual_quantity") or 0
+                    total_quantity = auto_count + manual_qty
+
+                    if total_quantity <= 0:
+                        continue  # nothing selected/entered - not an error, simply not included
+
+                    if not isinstance(product_type_name, str) or not product_type_name.strip():
+                        warnings.append(f"{sub_name}: no Product Type selected - not included.")
+                        continue
+
+                    carbon_factors_row = find_product_carbon_factors_row(
+                        apparatus_output_df, apparatus_name, product_type_name
+                    )
+
+                    if carbon_factors_row is None:
+                        warnings.append(f"{sub_name}: Product Type '{product_type_name}' not found for '{apparatus_name}'.")
+                        continue
+
+                    carbon_result = calculate_component_carbon(total_quantity, carbon_factors_row)
+
+                    results.append({
+                        "Apparatus": sub_name,
+                        "Product Type": product_type_name,
+                        "Quantity": total_quantity,
+                        "A1-A3": carbon_result["A1-A3"], "A4": carbon_result["A4"],
+                        "A5": carbon_result["A5"], "Total": carbon_result["Total"],
+                    })
+
                 elif kind == "extinguisher":
 
                     if sub_state["status"] == "N/A":
@@ -1733,6 +1899,27 @@ else:
 
                     specs = GROUP_DEFINITIONS[(cat_num, sub_name)]
                     rows.extend(component_group_design_rows(cat_name, specs, sub_state))
+
+                elif kind == "single_component":
+
+                    spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
+                    fake_group_state = {"components": {spec["key"]: sub_state["component"]}}
+                    rows.extend(component_group_design_rows(cat_name, [spec], fake_group_state))
+
+                elif kind == "identification_signs":
+
+                    rows.append({
+                        "Category": cat_name, "Subcategory": sub_name,
+                        "Status": (
+                            f"Ext:{sub_state.get('count_extinguishers')}, "
+                            f"HoseReel:{sub_state.get('count_hose_reels')}, "
+                            f"Hydrant:{sub_state.get('count_hydrants_boosters')}"
+                        ),
+                        "Determination Type": "Auto-count + Manual",
+                        "Value": sub_state.get("manual_quantity"),
+                        "Product Type": sub_state.get("product_type"),
+                        "Hazard Rating": None,
+                    })
 
                 elif kind == "extinguisher":
 
@@ -2353,6 +2540,98 @@ else:
                 elif result:
                     st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
                     st.session_state.test_dirty = True
+
+                continue
+
+            if kind == "single_component":
+
+                spec = SINGLE_COMPONENT_DEFINITIONS[(selected, sub_name)]
+
+                result = render_single_component(
+                    spec, sub_state, carbon_db.get("apparatus_output"),
+                    key_prefix=f"single_{selected}_{sub_name}",
+                )
+
+                if result == "toggled":
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+                elif result:
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.session_state.test_dirty = True
+
+                continue
+
+            if kind == "identification_signs":
+
+                arrow_col, name_col = st.columns([0.5, 4])
+                with arrow_col:
+                    arrow_label = "▼" if sub_state["expanded"] else "▶"
+                    toggle_expand = st.button(arrow_label, key=f"expand_btn_{selected}_{sub_name}")
+                with name_col:
+                    st.markdown(f"**{sub_name}**")
+
+                if toggle_expand:
+                    sub_state["expanded"] = not sub_state["expanded"]
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+
+                if sub_state["expanded"]:
+
+                    st.caption(
+                        "Select which implements should have identification signs counted "
+                        "automatically, and/or add a manual quantity. If both are used, they are added together."
+                    )
+
+                    new_count_ext = st.checkbox(
+                        "Count for Portable Extinguishers", value=sub_state["count_extinguishers"],
+                        key=f"idsign_ext_{selected}_{sub_name}",
+                    )
+                    new_count_hr = st.checkbox(
+                        "Count for Hose Reels", value=sub_state["count_hose_reels"],
+                        key=f"idsign_hr_{selected}_{sub_name}",
+                    )
+                    new_count_hb = st.checkbox(
+                        "Count for Hydrants / Boosters", value=sub_state["count_hydrants_boosters"],
+                        key=f"idsign_hb_{selected}_{sub_name}",
+                    )
+
+                    for key, new_val in [
+                        ("count_extinguishers", new_count_ext),
+                        ("count_hose_reels", new_count_hr),
+                        ("count_hydrants_boosters", new_count_hb),
+                    ]:
+                        if sub_state[key] != new_val:
+                            sub_state[key] = new_val
+                            st.session_state.test_dirty = True
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        apparatus_name = get_apparatus_name(selected, sub_name)
+                        product_options = get_available_product_types(carbon_db.get("apparatus_output"), apparatus_name)
+                        new_product = st.selectbox(
+                            "Product Type", ["(none selected)"] + product_options,
+                            index=(
+                                (["(none selected)"] + product_options).index(sub_state.get("product_type"))
+                                if sub_state.get("product_type") in product_options else 0
+                            ),
+                            key=f"idsign_product_{selected}_{sub_name}",
+                        )
+
+                    with col2:
+                        new_manual_qty = st.number_input(
+                            "Additional Manual Quantity (optional)", min_value=0, step=1,
+                            value=int(sub_state.get("manual_quantity") or 0),
+                            key=f"idsign_manual_{selected}_{sub_name}",
+                        )
+
+                    resolved_product = None if new_product == "(none selected)" else new_product
+                    if resolved_product != sub_state.get("product_type") or new_manual_qty != sub_state.get("manual_quantity"):
+                        sub_state["product_type"] = resolved_product
+                        sub_state["manual_quantity"] = new_manual_qty
+                        st.session_state.test_dirty = True
+
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
 
                 continue
             
