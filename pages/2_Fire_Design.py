@@ -42,6 +42,22 @@ from utils.standards_engine import (
     get_available_condition_values,
     get_extinguisher_requirement,
 )
+from utils.component_groups import (
+    component_spec,
+    init_group_state,
+    render_component,
+    render_component_group,
+    calculate_component,
+    calculate_component_group,
+    component_group_design_rows,
+    KIND_QUANTITY,
+    KIND_GRID_SPACING,
+    KIND_AREA,
+    KIND_MASS_VOLUME,
+    KIND_LENGTH,
+    KIND_LINKED_CHILD,
+)
+
 from utils.database_loader import (
     load_carbon_database,
     get_building_classes,
@@ -109,20 +125,16 @@ CATEGORY_NAMES = {
 CATEGORY_SUBCATEGORIES = {
     1: [
         "Smoke Detectors", "Heat Detectors", "Aspirating Units",
-        "Sampling Pipework", "Sampling Points", "Manual Call Points",
-        "Fire Indicator Panels",
+        "Sampling", "Manual Call Points", "Fire Indicator Panels",
     ],
     2: [
-        "Speakers", "EWIS Panels", "Amplifiers", "Fire-Rated Cabling",
-        "Non-Fire-Rated Cabling", "Batteries", "Visual Alarm Devices",
-        "Mounting Bases", "Sounders", "Sounder Bases",
+        "Audio", "Cabling", "EWIS Panels", "Visual Alarm Devices",
     ],
     3: [
         "Emergency Luminaires", "Illuminated Exit Signs", "Directional Exit Signs",
     ],
     4: [
-        "Hose Reel Assemblies", "Hose Reel Cabinets", "Hose Reel Pipework",
-        "Hose Reel Valves", "Portable Extinguishers",
+        "Hose Reels", "Portable Extinguishers",
     ],
     5: [
         "Plasterboard Wall Assemblies", "Speed Panel Wall Assemblies",
@@ -135,9 +147,7 @@ CATEGORY_SUBCATEGORIES = {
         "Heat Strengthened Glazing", "Fire Shutters", "Fire Curtains",
     ],
     6: [
-        "Sprinkler Heads", "Sprinkler Pipework", "Sprinkler Valves",
-        "Sprinkler Pumps", "Hydrant Valves", "Hydrant Pipework",
-        "Hydrant Boosters", "Hydrant Pumps",
+        "Sprinklers", "Hydrants",
     ],
     7: [
         "Smoke Exhaust Fans", "Fire Resistant Ductwork",
@@ -237,17 +247,100 @@ CATEGORY_APPARATUS_MAP = {
     (10, "Atrium Fire and Smoke-Control Systems"): "Atrium Fire and Smoke-Control System",
 }
 
+# ==========================================================
+# Component Group Definitions
+# ==========================================================
+# Each entry declares what's inside a "component_group" subcategory.
+# Adding a new grouped category = adding a list here, no new
+# render/calculate code required.
+
+# Shared between blank_subcategory_state(), rendering, and calculation
+# for the Sprinklers group's Valves/Pumps children.
+SPRINKLER_GROUP_CHILD_SPECS = [
+    component_spec("valves", "Sprinkler Valves", "Sprinkler Valve", KIND_LINKED_CHILD, parent_key="heads"),
+    component_spec("pumps", "Sprinkler Pumps", "Sprinkler Pump", KIND_QUANTITY, unit_label="pumps"),
+]
+
+GROUP_DEFINITIONS = {
+
+    (4, "Hose Reels"): [
+        component_spec("assembly", "Hose Reel Assembly", "Hose Reel Assembly", KIND_QUANTITY, unit_label="reels"),
+        component_spec("pipework", "Hose Reel Pipework", "Pipework", KIND_LENGTH),
+        component_spec("cabinets", "Hose Reel Cabinets", "Cabinet", KIND_LINKED_CHILD, parent_key="assembly"),
+        component_spec("valves", "Hose Reel Valves", "Valve", KIND_LINKED_CHILD, parent_key="assembly"),
+    ],
+
+    (2, "Audio"): [
+        component_spec("speakers", "Speakers", "Speaker", KIND_GRID_SPACING),
+        component_spec("speaker_batteries", "Speaker Batteries", "Battery", KIND_LINKED_CHILD,
+                       parent_key="speakers", linked_mode="override_only"),
+
+        component_spec("amplifiers", "Amplifiers", "Amplifier", KIND_QUANTITY, unit_label="units"),
+        component_spec("amplifier_batteries", "Amplifier Batteries", "Battery", KIND_LINKED_CHILD,
+                       parent_key="amplifiers", linked_mode="override_only"),
+
+        component_spec("sounders", "Sounders", "Sounder", KIND_GRID_SPACING),
+        component_spec("sounder_batteries", "Sounder Batteries", "Battery", KIND_LINKED_CHILD,
+                       parent_key="sounders", linked_mode="override_only"),
+        component_spec("sounder_bases", "Sounder Bases", "Sounder Base", KIND_LINKED_CHILD,
+                       parent_key="sounders"),
+    ],
+
+    (2, "Cabling"): [
+        component_spec("fire_rated_cabling", "Fire-Rated Cabling", "Fire-Rated Cabling", KIND_QUANTITY, unit_label="units"),
+        component_spec("non_fire_rated_cabling", "Non-Fire-Rated Cabling", "Non-Fire-Rated Cabling", KIND_QUANTITY, unit_label="units"),
+    ],
+
+    (2, "EWIS Panels"): [
+        component_spec("ewis_panels", "EWIS Panels", "EWIS Panel", KIND_QUANTITY, unit_label="units"),
+        component_spec("ewis_batteries", "EWIS Panel Batteries", "Battery", KIND_LINKED_CHILD,
+                       parent_key="ewis_panels", linked_mode="override_only"),
+    ],
+
+    (2, "Visual Alarm Devices"): [
+        component_spec("visual_alarm_devices", "Visual Alarm Devices", "Visual Alarm Device", KIND_GRID_SPACING),
+        component_spec("visual_alarm_batteries", "Visual Alarm Device Batteries", "Battery", KIND_LINKED_CHILD,
+                       parent_key="visual_alarm_devices", linked_mode="override_only"),
+        component_spec("mounting_bases", "Mounting Bases", "Mounting Base", KIND_LINKED_CHILD,
+                       parent_key="visual_alarm_devices"),
+    ],
+
+    (6, "Hydrants"): [
+        component_spec("hydrant_valves", "Hydrant Valves", "Hydrant Valve", KIND_QUANTITY, unit_label="valves",
+                       disclaimer="A reference formula exists in the Standards Calc Database (Risers × Storeys × "
+                                  "Outlets per Riser per Storey) - it's a simplified proxy, not a direct AS2419.1 "
+                                  "quantity rule. Confirm the required quantity manually."),
+        component_spec("hydrant_pipework", "Hydrant Pipework", "Hydrant Pipework", KIND_LENGTH),
+        component_spec("hydrant_boosters", "Hydrant Boosters", "Hydrant Booster", KIND_QUANTITY, unit_label="boosters",
+                       disclaimer="Typically 1 booster assembly per hydrant system - confirm against site layout and AS2419.1."),
+        component_spec("hydrant_pumps", "Hydrant Pumps", "Hydrant Pump", KIND_QUANTITY, unit_label="pumps"),
+    ],
+}
+
 # Subcategories needing a UI/calculation shape different from the
 # default "simple" one. Anything not listed here defaults to "simple".
 # Only subcategories needing a UI/calculation shape different from
 # the default "simple" (N/A/DTS/PBD table) go here. Everything else
 # in CATEGORY_SUBCATEGORIES defaults to "simple" automatically.
 SUBCATEGORY_KIND = {
-    (6, "Sprinkler Heads"): "sprinkler_heads",
-    (6, "Sprinkler Pipework"): "sprinkler_pipework",
+    (1, "Sampling"): "sampling_group",
+    (2, "Audio"): "component_group",
+    (2, "Cabling"): "component_group",
+    (2, "EWIS Panels"): "component_group",
+    (2, "Visual Alarm Devices"): "component_group",
+    (6, "Sprinklers"): "sprinkler_group",
+    (6, "Hydrants"): "component_group",
     (4, "Hose Reel Pipework"): "manual_length",
     (3, "Emergency Luminaires"): "not_implemented",
     (4, "Portable Extinguishers"): "extinguisher",
+    (4, "Hose Reels"): "component_group",
+    (10, "Data-Centre Gaseous Suppression Systems"): "unavailable",
+    (10, "Battery Energy Storage Fire Protection Systems"): "unavailable",
+    (10, "Commercial Kitchen Suppression Systems"): "unavailable",
+    (10, "Carpark Special Detection Systems"): "unavailable",
+    (10, "Atrium Fire and Smoke-Control Systems"): "unavailable",
+    # New grouped subcategories use "component_group" - see
+    # GROUP_DEFINITIONS below for what's inside each one.
 }
 
 
@@ -449,27 +542,26 @@ def blank_subcategory_state(cat_num, sub_name):
 
     kind = get_subcategory_kind(cat_num, sub_name)
 
-    if kind == "sprinkler_heads":
-        return {
-            "status": "N/A",
-            "expanded": False,
-            "table": empty_sprinkler_heads_table(),
-        }
-
-    if kind == "sprinkler_pipework":
-        return {
-            "expanded": False,
-            "mode": "Default Formula",
-            "product_type": None,
-            "manual_value": None,
-        }
-
     if kind == "manual_length":
         return {
             "expanded": False,
             "product_type": None,
             "manual_value": None,
         }
+    
+    if kind == "sprinkler_group":
+        return {
+            "expanded": False,
+            "heads_status": "N/A",
+            "heads_table": empty_sprinkler_heads_table(),
+            "pipework_mode": "Default Formula",
+            "pipework_product_type": None,
+            "pipework_manual_value": None,
+            "group": init_group_state(SPRINKLER_GROUP_CHILD_SPECS),
+        }
+    
+    if kind == "component_group":
+        return init_group_state(GROUP_DEFINITIONS[(cat_num, sub_name)])
     
     if kind == "extinguisher":
         return {
@@ -491,6 +583,15 @@ def blank_subcategory_state(cat_num, sub_name):
             "cabinet_mode": "Equal to Extinguishers",
             "cabinet_quantity_override": None,
             "cabinet_product_type": None,
+        }
+    
+    if kind == "sampling_group":
+        return {
+            "expanded": False,
+            "pipework_product_type": None,
+            "pipework_quantity": None,
+            "points_product_type": None,
+            "points_quantity": None,
         }
 
     # "simple" and "not_implemented" share the same state shape
@@ -519,7 +620,15 @@ def get_subcategory_color_status(cat_num, sub_name, sub_state):
         return "PBD" if sub_state.get("product_type") else "N/A"
     if kind == "extinguisher":
         return sub_state.get("status", "N/A")
-    if kind == "not_implemented":
+    if kind == "sprinkler_group":
+        return "PBD" if sub_state.get("heads_status") in ("DTS", "PBD") else "N/A"
+    if kind == "component_group":
+        has_any_data = any(
+            comp.get("value") or comp.get("included")
+            for comp in sub_state.get("components", {}).values()
+        )
+        return "PBD" if has_any_data else "N/A"
+    if kind in ("not_implemented", "unavailable"):
         return "N/A"
     return sub_state.get("status", "N/A")
 
@@ -1184,6 +1293,177 @@ else:
                         "Total": carbon_result["Total"],
                     })
 
+                elif kind == "sampling_group":
+
+                    for child_label, product_key, qty_key, apparatus_key in [
+                        ("Sampling Pipework", "pipework_product_type", "pipework_quantity", "Sampling Pipework"),
+                        ("Sampling Points", "points_product_type", "points_quantity", "Sampling Points"),
+                    ]:
+
+                        product_type_name = sub_state.get(product_key)
+                        quantity = sub_state.get(qty_key)
+
+                        if not quantity or quantity <= 0:
+                            continue  # not an error - simply not included if left blank
+
+                        if not isinstance(product_type_name, str) or not product_type_name.strip():
+                            warnings.append(f"{child_label}: no Product Type selected - not included.")
+                            continue
+
+                        child_apparatus_name = get_apparatus_name(1, apparatus_key)
+
+                        carbon_factors_row = find_product_carbon_factors_row(
+                            apparatus_output_df, child_apparatus_name, product_type_name
+                        )
+
+                        if carbon_factors_row is None:
+                            warnings.append(
+                                f"{child_label}: Product Type '{product_type_name}' not found for '{child_apparatus_name}'."
+                            )
+                            continue
+
+                        carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
+
+                        results.append({
+                            "Apparatus": child_label,
+                            "Product Type": product_type_name,
+                            "Quantity": quantity,
+                            "A1-A3": carbon_result["A1-A3"], "A4": carbon_result["A4"],
+                            "A5": carbon_result["A5"], "Total": carbon_result["Total"],
+                        })
+
+                elif kind == "sprinkler_group":
+
+                    local_total_heads_quantity = 0.0
+                    local_effective_linear_spacing_m = None
+
+                    if sub_state["heads_status"] != "N/A" and not sub_state["heads_table"].empty:
+
+                        for _, row in sub_state["heads_table"].iterrows():
+
+                            determination_label = row.get("Determination Type")
+                            input_value = row.get("Value")
+                            product_type_name = row.get("Product Type")
+
+                            if input_value is None or pd.isna(input_value) or input_value == 0:
+                                warnings.append(f"{sub_name}: a Sprinkler Head row is missing a Value - skipped.")
+                                continue
+
+                            det_key = SPRINKLER_DETERMINATION_LABELS.get(determination_label)
+
+                            if det_key == "quantity":
+                                quantity = input_value
+                            else:
+                                quantity = calculate_quantity(
+                                    "sprinkler", "sprinkler_head", "quantity_formula",
+                                    {"protected_area": building_area_m2, "spacing_area": (input_value ** 2) if input_value else None},
+                                )
+
+                            if quantity is None:
+                                warnings.append(f"{sub_name}: Building Area must be set to use Linear Spacing.")
+                                continue
+
+                            if not isinstance(product_type_name, str) or not product_type_name.strip():
+                                warnings.append(f"{sub_name}: a Sprinkler Head row has no Product Type selected - not included.")
+                                continue
+
+                            carbon_factors_row = find_product_carbon_factors_row(
+                                apparatus_output_df, "Sprinkler Head", product_type_name
+                            )
+
+                            if carbon_factors_row is None:
+                                warnings.append(f"{sub_name}: Product Type '{product_type_name}' not found for 'Sprinkler Head'.")
+                                continue
+
+                            carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
+
+                            results.append({
+                                "Apparatus": "Sprinkler Heads",
+                                "Product Type": product_type_name,
+                                "Quantity": quantity,
+                                "A1-A3": carbon_result["A1-A3"], "A4": carbon_result["A4"],
+                                "A5": carbon_result["A5"], "Total": carbon_result["Total"],
+                            })
+
+                            local_total_heads_quantity += quantity
+
+                            if det_key == "linear_spacing" and local_effective_linear_spacing_m is None:
+                                local_effective_linear_spacing_m = input_value
+
+                    pipework_product_type_name = sub_state.get("pipework_product_type")
+
+                    if isinstance(pipework_product_type_name, str) and pipework_product_type_name.strip():
+
+                        length_m = None
+
+                        if sub_state["pipework_mode"] == "Manual Override":
+
+                            length_m = sub_state.get("pipework_manual_value")
+                            if not length_m or length_m <= 0:
+                                warnings.append(f"{sub_name}: enter a manual Sprinkler Pipework length greater than 0.")
+                                length_m = None
+
+                        else:
+
+                            variables = {
+                                "risers": info.get("building_risers") or get_parameter("sprinkler", "pipework", "default_risers"),
+                                "storeys": info.get("building_storeys"),
+                                "floor_to_floor_height": info.get("building_floor_to_floor_height"),
+                                "protected_area": building_area_m2,
+                                "spacing_area": (local_effective_linear_spacing_m ** 2) if local_effective_linear_spacing_m else None,
+                            }
+                            vertical = calculate_quantity("sprinkler", "pipework", "vertical_riser_formula", variables)
+                            horizontal = calculate_quantity("sprinkler", "pipework", "horizontal_pipe_formula", variables)
+
+                            if vertical is None or horizontal is None:
+                                warnings.append(
+                                    f"{sub_name}: insufficient inputs to compute the default Sprinkler Pipework formula "
+                                    f"(check Risers, Storeys, Floor-to-Floor Height, and Sprinkler Heads)."
+                                )
+                            else:
+                                length_m = vertical + horizontal
+
+                        if length_m:
+
+                            carbon_factors_row = find_product_carbon_factors_row(
+                                apparatus_output_df, "Sprinkler Pipework", pipework_product_type_name
+                            )
+
+                            if carbon_factors_row is None:
+                                warnings.append(f"{sub_name}: Product Type '{pipework_product_type_name}' not found for 'Sprinkler Pipework'.")
+                            else:
+                                carbon_result = calculate_component_carbon(length_m, carbon_factors_row)
+                                results.append({
+                                    "Apparatus": "Sprinkler Pipework",
+                                    "Product Type": pipework_product_type_name,
+                                    "Quantity": length_m,
+                                    "A1-A3": carbon_result["A1-A3"], "A4": carbon_result["A4"],
+                                    "A5": carbon_result["A5"], "Total": carbon_result["Total"],
+                                })
+
+                    resolved_quantities = {"heads": local_total_heads_quantity if local_total_heads_quantity > 0 else None}
+
+                    for spec in SPRINKLER_GROUP_CHILD_SPECS:
+                        comp_state = sub_state["group"]["components"][spec["key"]]
+                        parent_qty = resolved_quantities.get(spec.get("parent_key")) if spec["kind"] == KIND_LINKED_CHILD else None
+                        result = calculate_component(
+                            spec, comp_state, apparatus_output_df,
+                            building_area_m2=building_area_m2, parent_quantity=parent_qty, warnings=warnings,
+                        )
+                        if result:
+                            results.append(result)
+
+                elif kind == "component_group":
+
+                    specs = GROUP_DEFINITIONS[(cat_num, sub_name)]
+
+                    group_results = calculate_component_group(
+                        specs, sub_state, apparatus_output_df,
+                        building_area_m2=building_area_m2, warnings=warnings,
+                    )
+
+                    results.extend(group_results)
+
                 elif kind == "extinguisher":
 
                     if sub_state["status"] == "N/A":
@@ -1400,6 +1680,59 @@ else:
                         "Product Type": sub_state.get("product_type"),
                         "Hazard Rating": None,
                     })
+
+                elif kind == "sampling_group":
+
+                    rows.append({
+                        "Category": cat_name, "Subcategory": "Sampling Pipework",
+                        "Status": "Manual", "Determination Type": "Quantity",
+                        "Value": sub_state.get("pipework_quantity"),
+                        "Product Type": sub_state.get("pipework_product_type"),
+                        "Hazard Rating": None,
+                    })
+                    rows.append({
+                        "Category": cat_name, "Subcategory": "Sampling Points",
+                        "Status": "Manual", "Determination Type": "Quantity",
+                        "Value": sub_state.get("points_quantity"),
+                        "Product Type": sub_state.get("points_product_type"),
+                        "Hazard Rating": None,
+                    })
+
+                elif kind == "sprinkler_group":
+
+                    if sub_state["heads_table"].empty:
+                        rows.append({
+                            "Category": cat_name, "Subcategory": "Sprinkler Heads",
+                            "Status": sub_state.get("heads_status"),
+                            "Determination Type": None, "Value": None,
+                            "Product Type": None, "Hazard Rating": None,
+                        })
+                    else:
+                        for _, r in sub_state["heads_table"].iterrows():
+                            rows.append({
+                                "Category": cat_name, "Subcategory": "Sprinkler Heads",
+                                "Status": sub_state.get("heads_status"),
+                                "Determination Type": r.get("Determination Type"),
+                                "Value": r.get("Value"),
+                                "Product Type": r.get("Product Type"),
+                                "Hazard Rating": r.get("Hazard Rating"),
+                            })
+
+                    rows.append({
+                        "Category": cat_name, "Subcategory": "Sprinkler Pipework",
+                        "Status": sub_state.get("pipework_mode"),
+                        "Determination Type": sub_state.get("pipework_mode"),
+                        "Value": sub_state.get("pipework_manual_value"),
+                        "Product Type": sub_state.get("pipework_product_type"),
+                        "Hazard Rating": None,
+                    })
+
+                    rows.extend(component_group_design_rows(cat_name, SPRINKLER_GROUP_CHILD_SPECS, sub_state["group"]))
+
+                elif kind == "component_group":
+
+                    specs = GROUP_DEFINITIONS[(cat_num, sub_name)]
+                    rows.extend(component_group_design_rows(cat_name, specs, sub_state))
 
                 elif kind == "extinguisher":
 
@@ -1638,6 +1971,12 @@ else:
                 )
                 continue
 
+            if kind == "unavailable":
+
+                st.markdown(f"**{sub_name}**")
+                st.info("This is not available.")
+                continue
+
             # ================================================
             # sprinkler_pipework kind (no N/A/DTS/PBD toggle)
             # ================================================
@@ -1778,6 +2117,245 @@ else:
                         st.session_state.test_dirty = True
 
                 continue
+            if kind == "sampling_group":
+
+                arrow_col, name_col = st.columns([0.5, 4])
+
+                with arrow_col:
+                    arrow_label = "▼" if sub_state["expanded"] else "▶"
+                    toggle_expand = st.button(arrow_label, key=f"expand_btn_{selected}_{sub_name}")
+
+                with name_col:
+                    st.markdown(f"**{sub_name}**")
+
+                if toggle_expand:
+                    sub_state["expanded"] = not sub_state["expanded"]
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+
+                if sub_state["expanded"]:
+
+                    pipework_apparatus = get_apparatus_name(1, "Sampling Pipework")
+                    points_apparatus = get_apparatus_name(1, "Sampling Points")
+
+                    st.markdown("##### Sampling Pipework")
+
+                    pipework_products = get_available_product_types(carbon_db.get("apparatus_output"), pipework_apparatus)
+
+                    new_pipework_product = st.selectbox(
+                        "Product Type", ["(none selected)"] + pipework_products,
+                        index=(
+                            (["(none selected)"] + pipework_products).index(sub_state.get("pipework_product_type"))
+                            if sub_state.get("pipework_product_type") in pipework_products else 0
+                        ),
+                        key=f"sampling_pipework_product_{selected}_{sub_name}",
+                    )
+                    new_pipework_quantity = st.number_input(
+                        "Quantity", min_value=0, step=1,
+                        value=int(sub_state.get("pipework_quantity") or 0),
+                        key=f"sampling_pipework_qty_{selected}_{sub_name}",
+                    )
+
+                    resolved_pipework_product = None if new_pipework_product == "(none selected)" else new_pipework_product
+                    if resolved_pipework_product != sub_state.get("pipework_product_type") or new_pipework_quantity != sub_state.get("pipework_quantity"):
+                        sub_state["pipework_product_type"] = resolved_pipework_product
+                        sub_state["pipework_quantity"] = new_pipework_quantity
+                        st.session_state.test_dirty = True
+
+                    st.divider()
+                    st.markdown("##### Sampling Points")
+
+                    points_products = get_available_product_types(carbon_db.get("apparatus_output"), points_apparatus)
+
+                    new_points_product = st.selectbox(
+                        "Product Type", ["(none selected)"] + points_products,
+                        index=(
+                            (["(none selected)"] + points_products).index(sub_state.get("points_product_type"))
+                            if sub_state.get("points_product_type") in points_products else 0
+                        ),
+                        key=f"sampling_points_product_{selected}_{sub_name}",
+                    )
+                    new_points_quantity = st.number_input(
+                        "Quantity", min_value=0, step=1,
+                        value=int(sub_state.get("points_quantity") or 0),
+                        key=f"sampling_points_qty_{selected}_{sub_name}",
+                    )
+
+                    resolved_points_product = None if new_points_product == "(none selected)" else new_points_product
+                    if resolved_points_product != sub_state.get("points_product_type") or new_points_quantity != sub_state.get("points_quantity"):
+                        sub_state["points_product_type"] = resolved_points_product
+                        sub_state["points_quantity"] = new_points_quantity
+                        st.session_state.test_dirty = True
+
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+
+                continue
+
+            if kind == "sprinkler_group":
+
+                arrow_col, name_col = st.columns([0.5, 4])
+                with arrow_col:
+                    arrow_label = "▼" if sub_state["expanded"] else "▶"
+                    toggle_expand = st.button(arrow_label, key=f"expand_btn_{selected}_{sub_name}")
+                with name_col:
+                    st.markdown(f"**{sub_name}**")
+
+                if toggle_expand:
+                    sub_state["expanded"] = not sub_state["expanded"]
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+
+                if sub_state["expanded"]:
+
+                    # ---- Heads ----
+                    st.markdown("##### Sprinkler Heads")
+
+                    new_heads_status = st.radio(
+                        "Determination Method", ["N/A", "DTS", "PBD"],
+                        index=["N/A", "DTS", "PBD"].index(sub_state["heads_status"]),
+                        horizontal=True,
+                        key=f"sprinkler_heads_status_{selected}_{sub_name}",
+                    )
+                    if new_heads_status != sub_state["heads_status"]:
+                        sub_state["heads_status"] = new_heads_status
+                        if new_heads_status == "DTS":
+                            sub_state["heads_table"] = sprinkler_heads_dts_table()
+                        elif new_heads_status == "PBD":
+                            sub_state["heads_table"] = sprinkler_heads_pbd_table()
+                        else:
+                            sub_state["heads_table"] = empty_sprinkler_heads_table()
+                        st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                        st.session_state.test_dirty = True
+                        st.rerun()
+
+                    if sub_state["heads_status"] == "N/A":
+                        st.dataframe(empty_sprinkler_heads_table(), use_container_width=True, hide_index=True)
+                        st.caption("The embodied carbon for this system is not considered.")
+                    else:
+                        heads_product_options = get_available_product_types(carbon_db.get("apparatus_output"), "Sprinkler Head")
+                        is_dts_heads = sub_state["heads_status"] == "DTS"
+
+                        edited_heads = st.data_editor(
+                            sub_state["heads_table"],
+                            use_container_width=True, hide_index=True,
+                            num_rows="fixed" if is_dts_heads else "dynamic",
+                            column_config={
+                                "Product Type": st.column_config.SelectboxColumn(
+                                    "Product Type", options=heads_product_options if heads_product_options else ["No products found"], required=False,
+                                ),
+                                "Determination Type": st.column_config.SelectboxColumn(
+                                    "Determination Type", options=SPRINKLER_DETERMINATION_OPTIONS, required=True, disabled=is_dts_heads,
+                                ),
+                                "Value": st.column_config.NumberColumn("Value", min_value=0.0, required=True, disabled=is_dts_heads),
+                                "Hazard Rating": st.column_config.SelectboxColumn(
+                                    "Hazard Rating", options=HAZARD_RATING_OPTIONS, required=True, disabled=is_dts_heads,
+                                ),
+                            },
+                            key=f"table_sprinkler_heads_{selected}_{sub_name}",
+                        )
+
+                        if not edited_heads.equals(sub_state["heads_table"]):
+                            sub_state["heads_table"] = edited_heads
+                            st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                            st.session_state.test_dirty = True
+
+                    st.divider()
+
+                    # ---- Pipework ----
+                    st.markdown("##### Sprinkler Pipework")
+
+                    pipework_product_options = get_available_product_types(carbon_db.get("apparatus_output"), "Sprinkler Pipework")
+
+                    mode_col, product_col = st.columns(2)
+                    with mode_col:
+                        new_pipework_mode = st.radio(
+                            "Mode", PIPEWORK_MODE_OPTIONS,
+                            index=PIPEWORK_MODE_OPTIONS.index(sub_state["pipework_mode"]),
+                            horizontal=True,
+                            key=f"sprinkler_pipework_mode_{selected}_{sub_name}",
+                        )
+                    with product_col:
+                        new_pipework_product = st.selectbox(
+                            "Product Type", ["(none selected)"] + pipework_product_options,
+                            index=(
+                                (["(none selected)"] + pipework_product_options).index(sub_state.get("pipework_product_type"))
+                                if sub_state.get("pipework_product_type") in pipework_product_options else 0
+                            ),
+                            key=f"sprinkler_pipework_product_{selected}_{sub_name}",
+                        )
+
+                    if new_pipework_mode != sub_state["pipework_mode"]:
+                        sub_state["pipework_mode"] = new_pipework_mode
+                        st.session_state.test_dirty = True
+
+                    resolved_pipework_product = None if new_pipework_product == "(none selected)" else new_pipework_product
+                    if resolved_pipework_product != sub_state.get("pipework_product_type"):
+                        sub_state["pipework_product_type"] = resolved_pipework_product
+                        st.session_state.test_dirty = True
+
+                    if sub_state["pipework_mode"] == "Manual Override":
+                        new_pipework_value = st.number_input(
+                            "Pipework Length (m)", min_value=0.0, step=1.0,
+                            value=float(sub_state.get("pipework_manual_value") or 0.0),
+                            key=f"sprinkler_pipework_value_{selected}_{sub_name}",
+                        )
+                        if new_pipework_value != sub_state.get("pipework_manual_value"):
+                            sub_state["pipework_manual_value"] = new_pipework_value
+                            st.session_state.test_dirty = True
+                    else:
+                        st.number_input(
+                            "Pipework Length (m) — calculated automatically",
+                            value=0.0, disabled=True,
+                            key=f"sprinkler_pipework_value_disabled_{selected}_{sub_name}",
+                        )
+                        st.caption(
+                            "Formula: Risers × Storeys × Floor-to-Floor Height + "
+                            "Sprinkler Number × Floor Area / √(Linear Spacing). "
+                            "Requires Risers, Storeys, and Floor-to-Floor Height set "
+                            "on the Project Information page, plus at least one Sprinkler Head row."
+                        )
+                        st.caption(
+                            "⚠️ This default formula is an early-stage geometric approximation, "
+                            "not a cited AS clause. Verify before relying on it for design."
+                        )
+
+                    st.divider()
+
+                    # ---- Valves + Pumps (generic library) ----
+                    for i, spec in enumerate(SPRINKLER_GROUP_CHILD_SPECS):
+                        if i > 0:
+                            st.divider()
+                        comp_state = sub_state["group"]["components"][spec["key"]]
+                        changed = render_component(
+                            spec, comp_state, carbon_db.get("apparatus_output"),
+                            parent_quantity=None,
+                            key_prefix=f"sprinkler_group_{selected}_{sub_name}",
+                        )
+                        if changed:
+                            st.session_state.test_dirty = True
+
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+
+                continue
+
+            if kind == "component_group":
+
+                specs = GROUP_DEFINITIONS[(selected, sub_name)]
+
+                result = render_component_group(
+                    sub_name, specs, sub_state, carbon_db.get("apparatus_output"),
+                    key_prefix=f"group_{selected}_{sub_name}",
+                )
+
+                if result == "toggled":
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.rerun()
+                elif result:
+                    st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
+                    st.session_state.test_dirty = True
+
+                continue
+            
             if kind == "extinguisher":
 
                 arrow_col, name_col, toggle_col = st.columns([0.5, 2, 3])
