@@ -57,7 +57,7 @@ def apply_global_styles():
 }}
 
 [data-testid="stSidebar"] {{
-    background-color: var(--light-grey);
+    background-color: var(--soft-red);
 }}
 
 

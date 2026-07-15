@@ -1,3 +1,5 @@
+import glob
+
 import streamlit as st
 
 from utils.constants import APP_NAME, APP_VERSION, APP_STATUS, APP_SUBTITLE
@@ -65,7 +67,7 @@ with col1:
     st.markdown(
         """
 <div class="nav-card" style="text-align:center;">
-<h3>📘</h3>
+<h3>📚</h3>
 <h4>Deemed-to-Satisfy (DtS)</h4>
 </div>
 """,
@@ -97,11 +99,20 @@ with col3:
 
 st.markdown("")
 
-st.button(
+if st.button(
     "🔥 Start Fire Design Assessment",
     type="primary",
     use_container_width=True,
-)
+):
+    # Looked up by its "2_" prefix rather than hardcoded, so renaming
+    # the file (e.g. to add/change its sidebar icon) can't silently
+    # break this button.
+    fire_design_pages = glob.glob("pages/2_*.py")
+
+    if fire_design_pages:
+        st.switch_page(fire_design_pages[0])
+    else:
+        st.error("Fire Design page not found. Check it hasn't been moved or renamed to something outside the pages/2_* pattern.")
 
 from utils.network_info import get_app_url, generate_qr_code_bytes
 

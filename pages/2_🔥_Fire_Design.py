@@ -54,7 +54,7 @@ from utils.database_loader import (
 
 st.set_page_config(
     page_title="TestUI",
-    page_icon="🧪",
+    page_icon="🔥",
     layout="wide",
 )
 

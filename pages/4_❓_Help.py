@@ -6,7 +6,7 @@ from utils.styles import apply_global_styles, render_header, render_footer
 
 st.set_page_config(
     page_title="Help",
-    page_icon="📚",
+    page_icon="❓",
     layout="wide",
 )
 
