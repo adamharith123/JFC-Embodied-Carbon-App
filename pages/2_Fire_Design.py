@@ -122,8 +122,7 @@ CATEGORY_SUBCATEGORIES = {
     ],
     4: [
         "Hose Reel Assemblies", "Hose Reel Cabinets", "Hose Reel Pipework",
-        "Hose Reel Valves", "Portable Extinguishers", "Extinguisher Brackets",
-        "Extinguisher Cabinets",
+        "Hose Reel Valves", "Portable Extinguishers",
     ],
     5: [
         "Plasterboard Wall Assemblies", "Speed Panel Wall Assemblies",
