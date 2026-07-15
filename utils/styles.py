@@ -51,7 +51,7 @@ def apply_global_styles():
 
 
 .block-container {{
-    padding-top: 1.5rem;
+    padding-top: 3rem;
     padding-bottom: 2rem;
     max-width: 1400px;
 }}
@@ -60,6 +60,17 @@ def apply_global_styles():
     background-color: var(--soft-red);
 }}
 
+[data-testid="stSidebarNavItems"] a,
+[data-testid="stSidebarNavItems"] a * {{
+    font-size: 0.875rem !important;
+    font-weight: 600 !important;
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem; 
+}}
+
+[data-testid="stSidebarNavItems"] li {{
+    margin-bottom: 0.125rem;
+}}
 
 /* ==========================================================
    HEADINGS

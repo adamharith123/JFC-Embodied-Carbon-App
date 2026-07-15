@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 
-from utils.constants import APP_SUBTITLE, APP_STATUS
+from utils.constants import APP_NAME,APP_SUBTITLE, APP_STATUS
 from utils.styles import apply_global_styles, render_header, render_footer
 from utils.project_store import get_project_names, get_project_versions
 from utils.charts import (
@@ -21,7 +21,7 @@ st.set_page_config(
 
 apply_global_styles()
 
-render_header("Compare Results", APP_SUBTITLE, APP_STATUS)
+render_header(APP_NAME, APP_SUBTITLE, APP_STATUS)
 
 st.markdown(
     "Compare the embodied carbon results of any two saved versions of the "
