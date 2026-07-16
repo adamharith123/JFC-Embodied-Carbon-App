@@ -85,10 +85,19 @@ def find_product_carbon_factors_row(apparatus_output_df, apparatus_name, product
     Looks up a specific branded product's carbon factors from the
     Apparatus Output sheet, filtered to rows matching both the
     apparatus and the specific Product Type.
+
+    As of the 16 July ARUP_v2 database, Apparatus Output no longer has
+    a "Product Type" column - it's one generic row per apparatus
+    (Source is "EPD" or "Mass Approximation" instead of a branded
+    product name). When that column is missing, fall back to the
+    apparatus-level lookup instead of raising a KeyError.
     """
 
     if apparatus_output_df is None or apparatus_output_df.empty:
         return None
+
+    if "Product Type" not in apparatus_output_df.columns:
+        return find_carbon_factors_row(apparatus_output_df, apparatus_name)
 
     matching_rows = apparatus_output_df[
         (apparatus_output_df["Apparatus"] == apparatus_name)
@@ -106,10 +115,23 @@ def get_available_product_types(apparatus_output_df, apparatus_name):
     Returns the list of Product Type names available for a given
     apparatus, read from the Apparatus Output sheet - e.g. the
     specific branded components that exist for "Smoke Detector".
+
+    As of the 16 July ARUP_v2 database, there's no "Product Type"
+    column anymore (one generic row per apparatus). In that case,
+    return a single placeholder option ("Standard") so the existing
+    dropdown UI in the Fire Design page keeps working unmodified -
+    it'll just show one selectable option instead of several branded
+    ones.
     """
 
     if apparatus_output_df is None or apparatus_output_df.empty:
         return []
+
+    if "Product Type" not in apparatus_output_df.columns:
+        matching_rows = apparatus_output_df[
+            apparatus_output_df["Apparatus"] == apparatus_name
+        ]
+        return ["Standard"] if not matching_rows.empty else []
 
     matching_rows = apparatus_output_df[
         apparatus_output_df["Apparatus"] == apparatus_name
