@@ -3,39 +3,44 @@ Generic Component Archetype System
 
 Three reusable archetypes cover almost every apparatus in the tool:
 
-    KIND_INPUT                  - a value (with optional Grid Spacing
-                                   toggle) + Product Type. Parameterized
-                                   by include_spacing (bool) and units
-                                   (list of strings) - this ONE archetype
-                                   replaces what used to be five separate
-                                   kinds (quantity/area/length/mass_volume/
-                                   grid_spacing), since they only ever
-                                   differed by these two settings.
-    KIND_LINKED_CHILD            - include/exclude + "equal to parent" or
-                                    manual override (e.g. Cabinets mirror
-                                    Extinguishers, Batteries mirror their
-                                    parent device).
+    KIND_INPUT                  - a value + Product Type, with a
+                                   configurable set of "modes" (Total
+                                   Quantity / Grid Spacing / Coverage
+                                   Area / Formula) an engineer can pick
+                                   between per component, and an
+                                   optional "multiple rows" flag for
+                                   components that need to mix several
+                                   product types in one system (e.g.
+                                   Sprinkler Heads).
+    KIND_LINKED_CHILD            - include/exclude + "equal to parent"
+                                    or manual override (e.g. Cabinets
+                                    mirror Extinguishers).
     KIND_CROSS_CATEGORY_COUNTER  - checkboxes selecting which already-
-                                    calculated apparatus to sum, plus an
-                                    optional manual addition (e.g.
-                                    Identification Signs counting
-                                    Extinguishers + Hose Reels + Hydrants).
+                                    calculated apparatus to sum, plus
+                                    an optional manual addition.
 
-Anything with a genuinely different UI shape (Sprinkler Heads' multi-row
-hazard table, Extinguishers' AS2444 minimum-rating form) stays as
-bespoke, hand-written code elsewhere - these three archetypes are not
-meant to force-fit every possible future component, only the ones that
-are structurally identical to something already built.
+Anything with a genuinely different UI shape (the Extinguisher's
+AS2444 minimum-rating form) stays as bespoke, hand-written code
+elsewhere - these three archetypes are not meant to force-fit every
+possible future component, only ones structurally identical to
+something already built.
+
+IMPORTANT: calculate_component() always returns a LIST of result
+dicts (possibly empty), not a single dict or None - this is what lets
+a multi-row Input component produce several results from one
+component. Callers should always do results.extend(...), not
+results.append(...).
 """
 
 import streamlit as st
+import pandas as pd
 
 from utils.proposed_design_calculations import (
-    calculate_equivalent_quantity,
     calculate_component_carbon,
     find_product_carbon_factors_row,
     get_available_product_types,
 )
+from utils.standards_engine import calculate_quantity as evaluate_calc_rules_formula
 
 # ==========================================================
 # Archetype Constants
@@ -45,16 +50,18 @@ KIND_INPUT = "input"
 KIND_LINKED_CHILD = "linked_child"
 KIND_CROSS_CATEGORY_COUNTER = "cross_category_counter"
 
-DETERMINATION_TYPES = {
-    "total_quantity": "Total Quantity (Units)",
+MODE_LABELS = {
+    "quantity": "Total Quantity (Units)",
     "grid_spacing": "Grid Spacing (Side length metres)",
+    "coverage_area": "Coverage Area (m² per unit)",
+    "formula": "Formula (AS Calc Sheet)",
 }
-DETERMINATION_TYPE_LABELS = {v: k for k, v in DETERMINATION_TYPES.items()}
-DETERMINATION_TYPE_OPTIONS = list(DETERMINATION_TYPES.values())
+MODE_LABEL_TO_KEY = {v: k for k, v in MODE_LABELS.items()}
 
 LINKED_CHILD_MODES = ["Equal to Parent", "Quantity Override"]
 
 DEFAULT_UNITS = ["units"]
+DEFAULT_MODES = ["quantity"]
 
 
 # ==========================================================
@@ -66,44 +73,56 @@ def component_spec(
     disclaimer=None,
     parent_key=None,
     linked_mode="choice",
-    include_spacing=False,
+    modes=None,
+    multi_row=False,
     units=None,
+    formula_system=None,
+    formula_component=None,
+    formula_parameters=None,
     counted_apparatus=None,
     manual_allowed=True,
 ):
     """
     Declares one component.
 
-    key               : unique string within its group/page
-    label             : display name
-    apparatus         : exact Apparatus name in the Carbon Database
-                         (unused for KIND_CROSS_CATEGORY_COUNTER)
-    kind              : one of the KIND_* constants above
+    key, label, apparatus, kind : as before
 
     -- KIND_INPUT --
-    include_spacing   : if True, shows the Determination Type dropdown
-                         (Total Quantity / Grid Spacing); if False, just
-                         a plain Value field
-    units             : list of unit strings for the Value field, e.g.
-                         ["m2"] (fixed label) or ["kg", "L"] (selectable
-                         toggle). Ignored when include_spacing is True,
-                         since the determination type labels already
-                         state their own units.
+    modes             : list of mode keys from MODE_LABELS, in the
+                         order they should appear in the dropdown.
+                         Only shown as a dropdown if len(modes) > 1;
+                         a single-mode component just shows a plain
+                         Value field.
+    multi_row         : if True, renders as a dynamic table (like
+                         Sprinkler Heads) where the engineer can add
+                         rows to mix Product Types / determination
+                         methods within one system.
+    units             : display unit(s) for "Total Quantity" mode
+                         (only meaningful when "quantity" is in modes)
+    formula_system / formula_component / formula_parameters :
+                         where to look up the "Formula" mode's value
+                         in the calc_rules sheet - formula_parameters
+                         is a list of parameter names, summed together
+                         (e.g. ["vertical_riser_formula",
+                         "horizontal_pipe_formula"])
 
     -- KIND_LINKED_CHILD --
-    parent_key        : the apparatus label whose quantity this mirrors.
-                         Can be a sibling in the same group, OR any
-                         Apparatus label already present in the running
-                         results list (enables cross-category linking,
-                         e.g. Sprinkler Valves -> "Sprinkler Heads").
-    linked_mode       : "choice" (user picks Equal to Parent or
-                         Override) or "override_only" (always manual,
-                         e.g. Batteries)
+    parent_key        : the apparatus label whose quantity this
+                         mirrors - can be any Apparatus label already
+                         present in the running results list, whether
+                         from the same group or elsewhere.
+    linked_mode       : "choice" or "override_only"
 
     -- KIND_CROSS_CATEGORY_COUNTER --
     counted_apparatus : list of Apparatus labels to offer as checkboxes
-    manual_allowed    : whether an additional manual quantity field is
-                         also shown
+    manual_allowed    : whether a manual quantity field is also shown
+
+    -- KIND_INPUT, Formula mode --
+    A component using Formula mode can also set parent_key - if set,
+    two extra variables become available to its formula:
+    parent_quantity and parent_spacing_area/spacing_area (the
+    referenced parent's calculated quantity, and its area-per-unit
+    figure if it used Grid Spacing or Coverage Area mode).
 
     disclaimer        : optional warning caption shown under the input
     """
@@ -115,46 +134,72 @@ def component_spec(
         "disclaimer": disclaimer,
         "parent_key": parent_key,
         "linked_mode": linked_mode,
-        "include_spacing": include_spacing,
+        "modes": modes or DEFAULT_MODES,
+        "multi_row": multi_row,
         "units": units or DEFAULT_UNITS,
+        "formula_system": formula_system,
+        "formula_component": formula_component,
+        "formula_parameters": formula_parameters or [],
         "counted_apparatus": counted_apparatus or [],
         "manual_allowed": manual_allowed,
     }
 
 
 # ==========================================================
-# Cross-Results Helper
+# Cross-Results Helpers
 # ==========================================================
 
 def get_quantity_by_apparatus(results, apparatus_label):
     """
     Sums the Quantity of every result so far whose "Apparatus" matches
-    the given label. Returns None if there's no match (rather than 0),
-    so callers can distinguish "not yet calculated" from "genuinely
-    zero". Used to resolve KIND_LINKED_CHILD parents that live outside
-    the current group (e.g. Sprinkler Valves referencing the Sprinkler
-    Heads total from a different, bespoke code path).
+    the given label. Returns None (not 0) if there's no match, so
+    callers can distinguish "not yet calculated" from "genuinely zero".
     """
+    if not apparatus_label:
+        return None
     matches = [r["Quantity"] for r in results if r.get("Apparatus") == apparatus_label]
     if not matches:
         return None
     return sum(matches)
 
 
+def get_spacing_area_by_apparatus(results, apparatus_label):
+    """
+    Returns the first available "area per unit" figure reported by a
+    Grid Spacing or Coverage Area calculation for the given apparatus
+    label. Used by Formula-mode components that need to reference
+    another component's spacing (e.g. Sprinkler Pipework referencing
+    Sprinkler Heads). If the parent has multiple rows with different
+    spacing values, the first one found is used - a simplification
+    for the common case of a single hazard classification per system.
+    """
+    if not apparatus_label:
+        return None
+    for r in results:
+        if r.get("Apparatus") == apparatus_label and r.get("SpacingArea") is not None:
+            return r["SpacingArea"]
+    return None
+
+
 # ==========================================================
 # State Initialization
 # ==========================================================
+
+def _empty_multi_row_table():
+    return pd.DataFrame(columns=["Determination Type", "Value", "Product Type"])
+
 
 def init_component_state(spec):
     kind = spec["kind"]
 
     if kind == KIND_INPUT:
-        state = {"product_type": None, "value": None}
-        if spec["include_spacing"]:
-            state["determination_type"] = DETERMINATION_TYPES["grid_spacing"]
-        elif len(spec["units"]) > 1:
-            state["unit"] = spec["units"][0]
-        return state
+        if spec["multi_row"]:
+            return {"table": _empty_multi_row_table()}
+        return {
+            "determination_type": MODE_LABELS[spec["modes"][0]],
+            "value": None,
+            "product_type": None,
+        }
 
     if kind == KIND_LINKED_CHILD:
         default_mode = "Quantity Override" if spec.get("linked_mode") == "override_only" else "Equal to Parent"
@@ -189,6 +234,8 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     kind = spec["kind"]
     dirty = False
+
+    # -------- Linked Child --------
 
     if kind == KIND_LINKED_CHILD:
 
@@ -259,6 +306,8 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
         return dirty
 
+    # -------- Cross-Category Counter --------
+
     if kind == KIND_CROSS_CATEGORY_COUNTER:
 
         st.caption(
@@ -310,83 +359,73 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
         return dirty
 
-    # -------- KIND_INPUT --------
+    # -------- Input --------
 
     if show_label:
         st.markdown(f"**{spec['label']}**")
 
     product_options = get_available_product_types(apparatus_output_df, spec["apparatus"])
-    units = spec["units"]
+    mode_options = [MODE_LABELS[m] for m in spec["modes"]]
+    show_mode_dropdown = len(mode_options) > 1
 
-    if spec["include_spacing"]:
+    if spec["multi_row"]:
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            new_det = st.selectbox(
-                "Determination Type", DETERMINATION_TYPE_OPTIONS,
-                index=DETERMINATION_TYPE_OPTIONS.index(comp_state["determination_type"]),
-                key=f"{key_prefix}_{spec['key']}_det",
-            )
-        with col2:
-            new_value = st.number_input(
-                "Value", min_value=0.0, step=1.0,
-                value=float(comp_state.get("value") or 0.0),
-                key=f"{key_prefix}_{spec['key']}_value",
-            )
-        with col3:
-            new_product = st.selectbox(
-                "Product Type", ["(none selected)"] + product_options,
-                index=(
-                    (["(none selected)"] + product_options).index(comp_state.get("product_type"))
-                    if comp_state.get("product_type") in product_options else 0
-                ),
-                key=f"{key_prefix}_{spec['key']}_product",
-            )
+        column_config = {
+            "Determination Type": st.column_config.SelectboxColumn(
+                "Determination Type", options=mode_options, required=True,
+                disabled=not show_mode_dropdown,
+            ),
+            "Value": st.column_config.NumberColumn("Value", min_value=0.0, required=True),
+            "Product Type": st.column_config.SelectboxColumn(
+                "Product Type",
+                options=product_options if product_options else ["No products found"],
+                required=False,
+            ),
+        }
 
-        resolved_product = None if new_product == "(none selected)" else new_product
-        if (new_det != comp_state["determination_type"] or new_value != comp_state.get("value")
-                or resolved_product != comp_state.get("product_type")):
-            comp_state["determination_type"] = new_det
-            comp_state["value"] = new_value
-            comp_state["product_type"] = resolved_product
-            dirty = True
+        edited = st.data_editor(
+            comp_state["table"], use_container_width=True, hide_index=True,
+            num_rows="dynamic", column_config=column_config,
+            key=f"{key_prefix}_{spec['key']}_table",
+        )
 
-    elif len(units) > 1:
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            new_unit = st.selectbox(
-                "Unit", units, index=units.index(comp_state.get("unit", units[0])),
-                key=f"{key_prefix}_{spec['key']}_unit",
-            )
-        with col2:
-            new_value = st.number_input(
-                f"Quantity ({new_unit})", min_value=0.0, step=0.1,
-                value=float(comp_state.get("value") or 0.0),
-                key=f"{key_prefix}_{spec['key']}_value",
-            )
-        with col3:
-            new_product = st.selectbox(
-                "Product Type", ["(none selected)"] + product_options,
-                index=(
-                    (["(none selected)"] + product_options).index(comp_state.get("product_type"))
-                    if comp_state.get("product_type") in product_options else 0
-                ),
-                key=f"{key_prefix}_{spec['key']}_product",
-            )
-
-        resolved_product = None if new_product == "(none selected)" else new_product
-        if (new_unit != comp_state.get("unit") or new_value != comp_state.get("value")
-                or resolved_product != comp_state.get("product_type")):
-            comp_state["unit"] = new_unit
-            comp_state["value"] = new_value
-            comp_state["product_type"] = resolved_product
+        if not edited.equals(comp_state["table"]):
+            comp_state["table"] = edited
             dirty = True
 
     else:
 
-        col1, col2 = st.columns(2)
-        with col1:
+        if show_mode_dropdown:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                new_mode = st.selectbox(
+                    "Determination Type", mode_options,
+                    index=mode_options.index(comp_state["determination_type"]),
+                    key=f"{key_prefix}_{spec['key']}_det",
+                )
+        else:
+            new_mode = mode_options[0]
+            col2, col3 = st.columns(2)
+
+        is_formula = MODE_LABEL_TO_KEY.get(new_mode) == "formula"
+
+        with col2:
+            if is_formula:
+                st.number_input(
+                    "Value — calculated automatically from AS Calc Sheet", value=0.0, disabled=True,
+                    key=f"{key_prefix}_{spec['key']}_value_disabled",
+                )
+                new_value = comp_state.get("value")
+            else:
+                unit_label = spec["units"][0] if spec["units"] else "units"
+                value_label = "Value" if show_mode_dropdown else f"Value ({unit_label})"
+                new_value = st.number_input(
+                    value_label, min_value=0.0, step=1.0,
+                    value=float(comp_state.get("value") or 0.0),
+                    key=f"{key_prefix}_{spec['key']}_value",
+                )
+
+        with col3:
             new_product = st.selectbox(
                 "Product Type", ["(none selected)"] + product_options,
                 index=(
@@ -395,18 +434,21 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 ),
                 key=f"{key_prefix}_{spec['key']}_product",
             )
-        with col2:
-            new_value = st.number_input(
-                f"Quantity ({units[0]})", min_value=0.0, step=1.0,
-                value=float(comp_state.get("value") or 0.0),
-                key=f"{key_prefix}_{spec['key']}_value",
-            )
 
         resolved_product = None if new_product == "(none selected)" else new_product
-        if resolved_product != comp_state.get("product_type") or new_value != comp_state.get("value"):
-            comp_state["product_type"] = resolved_product
+
+        if (new_mode != comp_state.get("determination_type") or new_value != comp_state.get("value")
+                or resolved_product != comp_state.get("product_type")):
+            comp_state["determination_type"] = new_mode
             comp_state["value"] = new_value
+            comp_state["product_type"] = resolved_product
             dirty = True
+
+        if is_formula:
+            st.caption(
+                f"Formula source: {spec['formula_system']} / {spec['formula_component']} "
+                f"({', '.join(spec['formula_parameters'])})"
+            )
 
     if spec.get("disclaimer"):
         st.caption(f"⚠️ {spec['disclaimer']}")
@@ -440,17 +482,6 @@ def render_component_group(group_label, specs, group_state, apparatus_output_df,
 
     if group_state["expanded"]:
 
-        # Resolve same-group parent quantities from raw entered
-        # values (a live preview only - the authoritative figure
-        # comes from Calculate, since KIND_INPUT with include_spacing
-        # needs Building Area to convert Grid Spacing to a quantity).
-        parent_quantities = {}
-        for spec in specs:
-            if spec["kind"] == KIND_INPUT:
-                comp_state = group_state["components"][spec["key"]]
-                if not spec["include_spacing"]:
-                    parent_quantities[spec["key"]] = comp_state.get("value")
-
         for i, spec in enumerate(specs):
 
             if i > 0:
@@ -460,9 +491,7 @@ def render_component_group(group_label, specs, group_state, apparatus_output_df,
 
             parent_qty = None
             if spec["kind"] == KIND_LINKED_CHILD and spec.get("parent_key"):
-                parent_qty = parent_quantities.get(spec["parent_key"])
-                if parent_qty is None:
-                    parent_qty = get_quantity_by_apparatus(results_so_far, spec["parent_key"])
+                parent_qty = get_quantity_by_apparatus(results_so_far, spec["parent_key"])
 
             changed = render_component(
                 spec, comp_state, apparatus_output_df,
@@ -509,20 +538,118 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
 # Calculation
 # ==========================================================
 
-def calculate_component(spec, comp_state, apparatus_output_df, building_area_m2=None, parent_quantity=None, results_so_far=None, warnings=None):
+def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=None):
+
+    if not isinstance(product_type_name, str) or not product_type_name.strip():
+        warnings.append(f"{spec['label']}: no Product Type selected - not included.")
+        return None
+
+    carbon_factors_row = find_product_carbon_factors_row(apparatus_output_df, spec["apparatus"], product_type_name)
+
+    if carbon_factors_row is None:
+        warnings.append(f"{spec['label']}: Product Type '{product_type_name}' not found for '{spec['apparatus']}'.")
+        return None
+
+    carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
+
+    return {
+        "Apparatus": spec["label"],
+        "Product Type": product_type_name,
+        "Quantity": quantity,
+        "SpacingArea": spacing_area,
+        "A1-A3": carbon_result["A1-A3"],
+        "A4": carbon_result["A4"],
+        "A5": carbon_result["A5"],
+        "Total": carbon_result["Total"],
+    }
+
+
+def _calculate_input_row(spec, determination_label, value, product_type_name, apparatus_output_df,
+                          project_info, results_so_far, warnings):
+
+    mode_key = MODE_LABEL_TO_KEY.get(determination_label)
+
+    if mode_key == "formula":
+
+        # Every key in Project Info is automatically available to a
+        # formula under its own name (e.g. building_storeys) - so
+        # adding a new building-level input doesn't require touching
+        # this file. A small set of shorter aliases is kept for the
+        # existing calc_rules formulas written before this variable
+        # naming was standardized.
+        variables = dict(project_info)
+        variables.setdefault("protected_area", project_info.get("building_area"))
+        variables.setdefault("storeys", project_info.get("building_storeys"))
+        variables.setdefault("floor_to_floor_height", project_info.get("building_floor_to_floor_height"))
+        variables.setdefault("risers", project_info.get("building_risers"))
+
+        if spec.get("parent_key"):
+            variables["parent_quantity"] = get_quantity_by_apparatus(results_so_far, spec["parent_key"])
+            parent_spacing = get_spacing_area_by_apparatus(results_so_far, spec["parent_key"])
+            variables["parent_spacing_area"] = parent_spacing
+            variables["spacing_area"] = parent_spacing  # convenience alias matching existing calc_rules formulas
+
+        parts = []
+        for param_name in spec["formula_parameters"]:
+            part = evaluate_calc_rules_formula(spec["formula_system"], spec["formula_component"], param_name, variables)
+            if part is None:
+                warnings.append(
+                    f"{spec['label']}: could not evaluate formula parameter '{param_name}' - check required "
+                    f"inputs (Building Area, Storeys, Floor-to-Floor Height, Risers, or the referenced "
+                    f"parent component)."
+                )
+                return None
+            parts.append(part)
+
+        if not parts:
+            return None
+
+        return _finalize_result(spec, sum(parts), product_type_name, apparatus_output_df, warnings)
+
+    if not value or value <= 0:
+        return None
+
+    building_area_m2 = project_info.get("building_area")
+    spacing_area_out = None
+
+    if mode_key == "quantity":
+        quantity = value
+
+    elif mode_key == "grid_spacing":
+        if not building_area_m2 or building_area_m2 <= 0:
+            warnings.append(f"{spec['label']}: Building Area must be set to use Grid Spacing.")
+            return None
+        quantity = building_area_m2 / (value ** 2)
+        spacing_area_out = value ** 2
+
+    elif mode_key == "coverage_area":
+        if not building_area_m2 or building_area_m2 <= 0:
+            warnings.append(f"{spec['label']}: Building Area must be set to use Coverage Area.")
+            return None
+        quantity = building_area_m2 / value
+        spacing_area_out = value
+
+    else:
+        return None
+
+    return _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=spacing_area_out)
+
+
+def calculate_component(spec, comp_state, apparatus_output_df, project_info=None, parent_quantity=None, results_so_far=None, warnings=None):
     """
-    Returns a result dict (Apparatus/Product Type/Quantity/A1-A3/A4/A5/Total)
-    or None if this component contributes nothing.
+    Always returns a LIST of result dicts (possibly empty) - see
+    module docstring. Callers should use results.extend(...).
     """
 
     warnings = warnings if warnings is not None else []
     results_so_far = results_so_far or []
+    project_info = project_info or {}
     kind = spec["kind"]
 
     if kind == KIND_LINKED_CHILD:
 
         if not comp_state.get("included"):
-            return None
+            return []
 
         product_type_name = comp_state.get("product_type")
 
@@ -535,9 +662,12 @@ def calculate_component(spec, comp_state, apparatus_output_df, building_area_m2=
 
         if not quantity or quantity <= 0:
             warnings.append(f"{spec['label']}: no quantity available - not included.")
-            return None
+            return []
 
-    elif kind == KIND_CROSS_CATEGORY_COUNTER:
+        result = _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings)
+        return [result] if result else []
+
+    if kind == KIND_CROSS_CATEGORY_COUNTER:
 
         product_type_name = comp_state.get("product_type")
 
@@ -549,87 +679,67 @@ def calculate_component(spec, comp_state, apparatus_output_df, building_area_m2=
         quantity = auto_count + manual_qty
 
         if quantity <= 0:
-            return None  # nothing selected/entered - not an error
+            return []
 
-    else:  # KIND_INPUT
+        result = _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings)
+        return [result] if result else []
 
-        value = comp_state.get("value")
-        product_type_name = comp_state.get("product_type")
+    # KIND_INPUT
+    if spec["multi_row"]:
 
-        if not value or value <= 0:
-            return None
+        table = comp_state.get("table")
+        if table is None or table.empty:
+            return []
 
-        if spec["include_spacing"]:
-            det_key = DETERMINATION_TYPE_LABELS.get(comp_state.get("determination_type"))
-            quantity = calculate_equivalent_quantity(det_key, value, building_area_m2)
-            if quantity is None:
-                warnings.append(f"{spec['label']}: Building Area must be set to use Grid Spacing.")
-                return None
-        else:
-            quantity = value
+        results = []
+        for _, row in table.iterrows():
+            result = _calculate_input_row(
+                spec, row.get("Determination Type"), row.get("Value"), row.get("Product Type"),
+                apparatus_output_df, project_info, results_so_far, warnings,
+            )
+            if result:
+                results.append(result)
+        return results
 
-    if not isinstance(product_type_name, str) or not product_type_name.strip():
-        warnings.append(f"{spec['label']}: no Product Type selected - not included.")
-        return None
-
-    carbon_factors_row = find_product_carbon_factors_row(
-        apparatus_output_df, spec["apparatus"], product_type_name
+    result = _calculate_input_row(
+        spec, comp_state.get("determination_type"), comp_state.get("value"), comp_state.get("product_type"),
+        apparatus_output_df, project_info, results_so_far, warnings,
     )
-
-    if carbon_factors_row is None:
-        warnings.append(f"{spec['label']}: Product Type '{product_type_name}' not found for '{spec['apparatus']}'.")
-        return None
-
-    carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
-
-    return {
-        "Apparatus": spec["label"],
-        "Product Type": product_type_name,
-        "Quantity": quantity,
-        "A1-A3": carbon_result["A1-A3"],
-        "A4": carbon_result["A4"],
-        "A5": carbon_result["A5"],
-        "Total": carbon_result["Total"],
-    }
+    return [result] if result else []
 
 
-def calculate_component_group(specs, group_state, apparatus_output_df, building_area_m2=None, results_so_far=None, warnings=None):
+def calculate_component_group(specs, group_state, apparatus_output_df, project_info=None, results_so_far=None, warnings=None):
     """
-    Calculates every component in a group, resolving linked_child /
-    cross_category_counter references (same-group or elsewhere in
-    results_so_far) along the way. Returns a list of result dicts -
-    does NOT mutate results_so_far; the caller should extend its own
-    results list with the return value between components/groups if
-    later components need to reference these.
+    Calculates every component in a group, IN SPEC ORDER, threading a
+    growing results list so later components can reference earlier
+    ones (Linked Child parents, Formula mode parents/spacing) whether
+    they're in the same group or not.
+
+    IMPORTANT: declare parent components BEFORE their children in the
+    specs list (e.g. Sprinkler Heads before Sprinkler Pipework/Valves)
+    - each component can only reference ones already calculated.
     """
 
     warnings = warnings if warnings is not None else []
-    results_so_far = list(results_so_far or [])
+    running_results = list(results_so_far or [])
     group_results = []
 
     for spec in specs:
-        if spec["kind"] in (KIND_LINKED_CHILD, KIND_CROSS_CATEGORY_COUNTER):
-            continue
-        comp_state = group_state["components"][spec["key"]]
-        result = calculate_component(
-            spec, comp_state, apparatus_output_df,
-            building_area_m2=building_area_m2, results_so_far=results_so_far, warnings=warnings,
-        )
-        if result:
-            group_results.append(result)
-            results_so_far.append(result)
 
-    for spec in specs:
-        if spec["kind"] not in (KIND_LINKED_CHILD, KIND_CROSS_CATEGORY_COUNTER):
-            continue
         comp_state = group_state["components"][spec["key"]]
-        result = calculate_component(
+
+        parent_qty = None
+        if spec["kind"] == KIND_LINKED_CHILD and spec.get("parent_key"):
+            parent_qty = get_quantity_by_apparatus(running_results, spec["parent_key"])
+
+        new_results = calculate_component(
             spec, comp_state, apparatus_output_df,
-            building_area_m2=building_area_m2, results_so_far=results_so_far, warnings=warnings,
+            project_info=project_info, parent_quantity=parent_qty,
+            results_so_far=running_results, warnings=warnings,
         )
-        if result:
-            group_results.append(result)
-            results_so_far.append(result)
+
+        group_results.extend(new_results)
+        running_results.extend(new_results)
 
     return group_results
 
@@ -656,6 +766,7 @@ def component_group_design_rows(cat_name, specs, group_state):
                 "Product Type": comp_state.get("product_type"),
                 "Hazard Rating": None,
             })
+
         elif kind == KIND_CROSS_CATEGORY_COUNTER:
             selected_labels = ", ".join(l for l, v in comp_state["selected"].items() if v)
             rows.append({
@@ -666,11 +777,31 @@ def component_group_design_rows(cat_name, specs, group_state):
                 "Product Type": comp_state.get("product_type"),
                 "Hazard Rating": None,
             })
+
+        elif spec["multi_row"]:
+            table = comp_state.get("table")
+            if table is None or table.empty:
+                rows.append({
+                    "Category": cat_name, "Subcategory": spec["label"], "Status": "Blank",
+                    "Determination Type": None, "Value": None, "Product Type": None, "Hazard Rating": None,
+                })
+            else:
+                for _, r in table.iterrows():
+                    rows.append({
+                        "Category": cat_name, "Subcategory": spec["label"], "Status": "Configured",
+                        "Determination Type": r.get("Determination Type"),
+                        "Value": r.get("Value"),
+                        "Product Type": r.get("Product Type"),
+                        "Hazard Rating": None,
+                    })
+
         else:
+            has_value = bool(comp_state.get("value"))
+            is_formula = comp_state.get("determination_type") == MODE_LABELS.get("formula")
             rows.append({
                 "Category": cat_name, "Subcategory": spec["label"],
-                "Status": "Configured" if comp_state.get("value") else "Blank",
-                "Determination Type": comp_state.get("determination_type", "Value"),
+                "Status": "Configured" if (has_value or is_formula) else "Blank",
+                "Determination Type": comp_state.get("determination_type"),
                 "Value": comp_state.get("value"),
                 "Product Type": comp_state.get("product_type"),
                 "Hazard Rating": None,

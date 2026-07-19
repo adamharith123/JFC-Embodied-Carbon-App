@@ -58,6 +58,22 @@ ARCHETYPE_MAP = {
     "cross-category counter": KIND_CROSS_CATEGORY_COUNTER,
 }
 
+# "Unavailable" is a sentinel, not a real archetype - it registers a
+# subcategory (and category name) with no component behind it, for
+# systems that are declared but not yet built out.
+UNAVAILABLE_ARCHETYPE = "unavailable"
+
+# Sheet uses friendly names ("Total Quantity", "Grid Spacing",
+# "Coverage Area", "Formula") in the "Modes" column - map to the
+# internal mode keys component_groups.py expects.
+MODE_NAME_MAP = {
+    "total quantity": "quantity",
+    "quantity": "quantity",
+    "grid spacing": "grid_spacing",
+    "coverage area": "coverage_area",
+    "formula": "formula",
+}
+
 
 def _file_mtime(path):
     try:
@@ -100,12 +116,28 @@ def _row_to_spec(row):
 
     if kind == KIND_INPUT:
 
-        include_spacing = str(row.get("Include Spacing", "")).strip().upper() == "Y"
+        modes_raw = _split_list(row.get("Modes")) or ["Total Quantity"]
+        modes = [MODE_NAME_MAP.get(m.strip().lower(), "quantity") for m in modes_raw]
+
+        multi_row = str(row.get("Allow Multiple Rows", "")).strip().upper() == "Y"
         units = _split_list(row.get("Units")) or ["units"]
+
+        formula_system = row.get("Formula System")
+        formula_system = str(formula_system).strip() if not pd.isna(formula_system) and str(formula_system).strip() else None
+
+        formula_component = row.get("Formula Component")
+        formula_component = str(formula_component).strip() if not pd.isna(formula_component) and str(formula_component).strip() else None
+
+        formula_parameters = _split_list(row.get("Formula Parameters"))
+
+        parent = row.get("Parent")
+        parent = str(parent).strip() if not pd.isna(parent) and str(parent).strip() else None
 
         return component_spec(
             key, str(row["Label"]).strip(), str(row["Apparatus"]).strip(), kind,
-            disclaimer=disclaimer, include_spacing=include_spacing, units=units,
+            disclaimer=disclaimer, modes=modes, multi_row=multi_row, units=units,
+            parent_key=parent, formula_system=formula_system,
+            formula_component=formula_component, formula_parameters=formula_parameters,
         )
 
     if kind == KIND_LINKED_CHILD:
@@ -178,6 +210,15 @@ def load_ui_structure():
             category_names.setdefault(cat_num, str(cat_display_name).strip())
 
         category_subcategories.setdefault(cat_num, [])
+
+        archetype_raw = str(row.get("Archetype", "")).strip().lower()
+
+        if archetype_raw == UNAVAILABLE_ARCHETYPE:
+            sub_name = str(row["Label"]).strip()
+            if sub_name not in category_subcategories[cat_num]:
+                category_subcategories[cat_num].append(sub_name)
+            subcategory_kind[(cat_num, sub_name)] = "unavailable"
+            continue
 
         spec = _row_to_spec(row)
 
