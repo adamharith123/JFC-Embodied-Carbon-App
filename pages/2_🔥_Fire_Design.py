@@ -194,8 +194,10 @@ def blank_subcategory_state(cat_num, sub_name):
         return init_group_state(GROUP_DEFINITIONS[(cat_num, sub_name)])
 
     if kind == "single_component":
-        spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
-        return {"expanded": False, "component": init_component_state(spec)}
+            spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
+            comp_state = init_component_state(spec)
+            comp_state["included"] = False
+            return {"expanded": False, "component": comp_state}
 
     # "unavailable" (or any unrecognized kind) - minimal defensive fallback
     return {"status": "N/A", "expanded": False}
@@ -218,14 +220,17 @@ def get_subcategory_color_status(cat_num, sub_name, sub_state):
     if kind == "extinguisher":
         return sub_state.get("status", "N/A")
     if kind == "component_group":
-        has_any_data = any(
-            comp.get("value") or comp.get("included") or (comp.get("table") is not None and not comp.get("table").empty)
+        member_statuses = [
+            comp.get("status", "PBD" if (comp.get("value") or comp.get("included")) else "N/A")
             for comp in sub_state.get("components", {}).values()
-        )
-        return "PBD" if has_any_data else "N/A"
+        ]
+        if "PBD" in member_statuses:
+            return "PBD"
+        if "DTS" in member_statuses:
+            return "DTS"
+        return "N/A"
     if kind == "single_component":
-        comp = sub_state.get("component", {})
-        return "PBD" if (comp.get("value") or comp.get("included")) else "N/A"
+        return sub_state.get("component", {}).get("status", "N/A")
     return "N/A"
 
 
@@ -1014,8 +1019,10 @@ else:
 
                 result = render_component_group(
                     sub_name, specs, sub_state, carbon_db.get("apparatus_output"),
-                    key_prefix=f"group_{selected}_{sub_name}", results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
-                )
+                    key_prefix=f"group_{selected}_{sub_name}",
+                    results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
+                    project_info=info,
+                    )
 
                 if result == "toggled":
                     st.session_state.test_categories[selected]["subcategories"][sub_name] = sub_state
@@ -1032,7 +1039,9 @@ else:
 
                 result = render_single_component(
                     spec, sub_state, carbon_db.get("apparatus_output"),
-                    key_prefix=f"single_{selected}_{sub_name}", results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
+                    key_prefix=f"single_{selected}_{sub_name}",
+                    results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
+                    project_info=info,
                 )
 
                 if result == "toggled":

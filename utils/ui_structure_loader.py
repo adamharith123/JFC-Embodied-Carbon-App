@@ -114,6 +114,9 @@ def _row_to_spec(row):
     disclaimer = row.get("Disclaimer")
     disclaimer = None if pd.isna(disclaimer) or not str(disclaimer).strip() else str(disclaimer).strip()
 
+    info = row.get("Info")
+    info = None if pd.isna(info) or not str(info).strip() else str(info).strip()
+
     if kind == KIND_INPUT:
 
         modes_raw = _split_list(row.get("Modes")) or ["Total Quantity"]

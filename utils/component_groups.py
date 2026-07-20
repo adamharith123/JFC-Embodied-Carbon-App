@@ -40,7 +40,20 @@ from utils.proposed_design_calculations import (
     find_product_carbon_factors_row,
     get_available_product_types,
 )
-from utils.standards_engine import calculate_quantity as evaluate_calc_rules_formula
+from utils.standards_engine import (
+    calculate_quantity as evaluate_calc_rules_formula,
+    resolve_default_variables,
+    get_notes as get_calc_rules_notes,
+    get_parameter,
+    get_available_condition_values,
+    formula_variable_names,
+)
+import math
+
+
+STATUS_NA = "N/A"
+STATUS_DTS = "DTS"
+STATUS_PBD = "PBD"
 
 # ==========================================================
 # Archetype Constants
@@ -55,6 +68,12 @@ MODE_LABELS = {
     "grid_spacing": "Grid Spacing (Side length metres)",
     "coverage_area": "Coverage Area (m² per unit)",
     "formula": "Formula (AS Calc Sheet)",
+}
+PROJECT_INFO_ALIASES = {
+    "protected_area": "building_area",
+    "storeys": "building_storeys",
+    "floor_to_floor_height": "building_floor_to_floor_height",
+    "risers": "building_risers",
 }
 MODE_LABEL_TO_KEY = {v: k for k, v in MODE_LABELS.items()}
 
@@ -71,6 +90,7 @@ DEFAULT_MODES = ["quantity"]
 def component_spec(
     key, label, apparatus, kind,
     disclaimer=None,
+    info=None,
     parent_key=None,
     linked_mode="choice",
     modes=None,
@@ -131,6 +151,7 @@ def component_spec(
         "label": label,
         "apparatus": apparatus,
         "kind": kind,
+        "info": info,
         "disclaimer": disclaimer,
         "parent_key": parent_key,
         "linked_mode": linked_mode,
@@ -196,6 +217,7 @@ def init_component_state(spec):
         if spec["multi_row"]:
             return {"table": _empty_multi_row_table()}
         return {
+            "status": STATUS_NA,
             "determination_type": MODE_LABELS[spec["modes"][0]],
             "value": None,
             "product_type": None,
@@ -221,12 +243,80 @@ def init_group_state(specs):
         "components": {spec["key"]: init_component_state(spec) for spec in specs},
     }
 
+def _resolve_sheet_default(spec, parameter_name, comp_state, key_prefix, project_info=None, selector_label=None):
+    """
+    Resolves one named variable to a defensible starting value, in
+    priority order: (1) an unconditional AS Calc Sheet default under
+    this component's Formula System/Component, (2) if the sheet
+    instead defines several named options for it (e.g. hazard class)
+    with no single default, renders the selector to choose between
+    them, (3) the matching Project Info field, (4) nothing - the
+    field starts blank and the user must type a value.
+
+    This is the one lookup behind Coverage Area, Grid Spacing, and
+    the Formula-mode variable panel alike.
+    """
+    system, component = spec.get("formula_system"), spec.get("formula_component")
+
+    if system and component:
+
+        unconditional = get_parameter(system, component, parameter_name)
+        if unconditional is not None:
+            return unconditional, "AS Calc Sheet default"
+
+        options = get_available_condition_values(system, component, parameter_name)
+        if options:
+            selectors = comp_state.setdefault("variable_selectors", {})
+            chosen = st.selectbox(
+                selector_label or f"{parameter_name.replace('_', ' ').title()} — condition", options,
+                index=options.index(selectors[parameter_name]) if selectors.get(parameter_name) in options else 0,
+                key=f"{key_prefix}_{parameter_name}_selector",
+            )
+            selectors[parameter_name] = chosen
+            return get_parameter(system, component, parameter_name, condition_value=chosen), f"AS Calc Sheet ({chosen})"
+
+    if project_info:
+        project_value = project_info.get(PROJECT_INFO_ALIASES.get(parameter_name, parameter_name))
+        if project_value:
+            return project_value, "Project Info"
+
+    return None, None
+
+
+def _render_variable_field(spec, parameter_name, comp_state, key_prefix, project_info=None, display_label=None):
+    """
+    One editable numeric field, pre-filled via _resolve_sheet_default()
+    and always freely overridable - whatever's currently in the field
+    is what calculation will use. Persists to
+    comp_state["variable_values"][parameter_name].
+    """
+    label = display_label or parameter_name.replace("_", " ").title()
+    values = comp_state.setdefault("variable_values", {})
+
+    resolved_default, source = _resolve_sheet_default(
+        spec, parameter_name, comp_state, key_prefix,
+        project_info=project_info, selector_label=f"{label} — condition",
+    )
+
+    seed = values.get(parameter_name)
+    if seed is None and resolved_default is not None:
+        seed = resolved_default
+
+    new_value = st.number_input(
+        label, min_value=0.0, step=0.1,
+        value=float(seed or 0.0),
+        key=f"{key_prefix}_{parameter_name}_value",
+        help=f"{source}: {resolved_default:g}" if resolved_default is not None else "No sheet default found - manual entry.",
+    )
+
+    values[parameter_name] = new_value
+    return new_value, source
 
 # ==========================================================
 # Rendering
 # ==========================================================
 
-def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, key_prefix="", show_label=True):
+def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, project_info=None, key_prefix="", show_label=True):
     """
     Renders the widgets for a single component and mutates comp_state
     in place. Returns True if anything changed.
@@ -303,6 +393,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
         if spec.get("disclaimer"):
             st.caption(f"⚠️ {spec['disclaimer']}")
+        _render_info_panel(spec)
 
         return dirty
 
@@ -356,17 +447,53 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
         if spec.get("disclaimer"):
             st.caption(f"⚠️ {spec['disclaimer']}")
+        _render_info_panel(spec)
 
         return dirty
 
     # -------- Input --------
 
-    if show_label:
+    # -------- Input --------
+
+    formula_notes = None
+
+    if not spec["multi_row"]:
+
+        dts_available = bool(spec.get("formula_system")) and "formula" in spec["modes"]
+        status_options = [STATUS_NA, STATUS_DTS, STATUS_PBD] if dts_available else [STATUS_NA, STATUS_PBD]
+        current_status = comp_state.get("status", STATUS_NA)
+        if current_status not in status_options:
+            current_status = STATUS_NA
+
+        name_col, status_col = st.columns([2, 3])
+
+        with name_col:
+            if show_label:
+                st.markdown(f"**{spec['label']}**")
+
+        with status_col:
+            new_status = st.radio(
+                spec["label"], status_options, index=status_options.index(current_status),
+                horizontal=True, key=f"{key_prefix}_{spec['key']}_status", label_visibility="collapsed",
+            )
+
+        if new_status != comp_state.get("status"):
+            comp_state["status"] = new_status
+            dirty = True
+
+        if comp_state["status"] == STATUS_NA:
+            if spec.get("disclaimer"):
+                st.caption(f"⚠️ {spec['disclaimer']}")
+            _render_info_panel(spec)
+            return dirty
+
+    elif show_label:
         st.markdown(f"**{spec['label']}**")
 
     product_options = get_available_product_types(apparatus_output_df, spec["apparatus"])
     mode_options = [MODE_LABELS[m] for m in spec["modes"]]
     show_mode_dropdown = len(mode_options) > 1
+    is_dts = (not spec["multi_row"]) and comp_state.get("status") == STATUS_DTS
 
     if spec["multi_row"]:
 
@@ -395,7 +522,11 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     else:
 
-        if show_mode_dropdown:
+        if is_dts:
+            new_mode = MODE_LABELS["formula"]
+            col2, col3 = st.columns(2)
+            st.caption("DTS: value is calculated automatically from the AS Calc Sheet defaults.")
+        elif show_mode_dropdown:
             col1, col2, col3 = st.columns(3)
             with col1:
                 new_mode = st.selectbox(
@@ -407,7 +538,8 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
             new_mode = mode_options[0]
             col2, col3 = st.columns(2)
 
-        is_formula = MODE_LABEL_TO_KEY.get(new_mode) == "formula"
+        mode_key = MODE_LABEL_TO_KEY.get(new_mode)
+        is_formula = mode_key == "formula"
 
         with col2:
             if is_formula:
@@ -416,6 +548,27 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                     key=f"{key_prefix}_{spec['key']}_value_disabled",
                 )
                 new_value = comp_state.get("value")
+            elif mode_key == "coverage_area":
+                unit_label = spec["units"][0] if spec["units"] else "m² per unit"
+                new_value, _ = _render_variable_field(
+                    spec, "coverage_area", comp_state, key_prefix, project_info=project_info,
+                    display_label=f"Coverage Area ({unit_label})",
+                )
+            elif mode_key == "grid_spacing":
+                area_default, area_source = _resolve_sheet_default(
+                    spec, "spacing_area", comp_state, key_prefix,
+                    project_info=project_info, selector_label="Hazard Classification",
+                )
+                values = comp_state.setdefault("variable_values", {})
+                seed = values.get("grid_spacing_side")
+                if seed is None and area_default:
+                    seed = math.sqrt(area_default)
+                new_value = st.number_input(
+                    "Grid Spacing (side length, m)", min_value=0.0, step=0.1,
+                    value=float(seed or 0.0), key=f"{key_prefix}_{spec['key']}_value",
+                    help=f"{area_source}: {area_default:g} m²/unit" if area_default else "No sheet default found - manual entry.",
+                )
+                values["grid_spacing_side"] = new_value
             else:
                 unit_label = spec["units"][0] if spec["units"] else "units"
                 value_label = "Value" if show_mode_dropdown else f"Value ({unit_label})"
@@ -450,13 +603,56 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 f"({', '.join(spec['formula_parameters'])})"
             )
 
+            needed_vars = set()
+            for p in spec["formula_parameters"]:
+                raw = get_parameter(spec["formula_system"], spec["formula_component"], p)
+                needed_vars |= formula_variable_names(raw)
+
+            implicit_vars = {"parent_quantity", "parent_spacing_area"}
+            if spec.get("parent_key"):
+                implicit_vars.add("spacing_area")
+            needed_vars -= implicit_vars
+
+            formula_notes = [
+                (p, get_calc_rules_notes(spec["formula_system"], spec["formula_component"], p))
+                for p in spec["formula_parameters"]
+            ]
+
+            if needed_vars:
+                with st.expander(f"🔢 Formula inputs for {spec['label']}", expanded=is_dts):
+                    for var_name in sorted(needed_vars):
+                        _render_variable_field(spec, var_name, comp_state, key_prefix, project_info=project_info)
+
     if spec.get("disclaimer"):
         st.caption(f"⚠️ {spec['disclaimer']}")
 
+    _render_info_panel(spec, formula_notes)
+
     return dirty
 
+def _render_info_panel(spec, formula_notes=None):
+    """
+    Collapsed-by-default panel showing the plain-English explanation
+    from ui_structure's "Info" column, plus - for Formula-mode
+    components - the calc_rules "notes" behind each parameter it
+    pulls. Both are spreadsheet-maintained; nothing here is hardcoded
+    per apparatus.
+    """
+    has_info = bool(spec.get("info"))
+    has_notes = bool(formula_notes)
+    if not has_info and not has_notes:
+        return
+    with st.expander("ℹ️ About this calculation", expanded=False):
+        if has_info:
+            st.markdown(spec["info"])
+        if has_notes:
+            if has_info:
+                st.divider()
+            for param_name, note in formula_notes:
+                if note:
+                    st.caption(f"**{param_name}**: {note}")
 
-def render_component_group(group_label, specs, group_state, apparatus_output_df, key_prefix, results_so_far=None):
+def render_component_group(group_label, specs, group_state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None):
     """
     Renders an expandable group containing multiple components.
     Returns "toggled" if the expand arrow was clicked (caller should
@@ -495,19 +691,34 @@ def render_component_group(group_label, specs, group_state, apparatus_output_df,
 
             changed = render_component(
                 spec, comp_state, apparatus_output_df,
-                parent_quantity=parent_qty, key_prefix=key_prefix,
+                parent_quantity=parent_qty, project_info=project_info, key_prefix=key_prefix,
             )
             dirty = dirty or changed
 
     return dirty
 
 
-def render_single_component(spec, state, apparatus_output_df, key_prefix, results_so_far=None):
+def render_single_component(spec, state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None):
     """
-    Renders one standalone component directly under its own nav entry
-    - for subcategories that don't need a group wrapper. state =
+    Renders one standalone component directly under its own nav entry.
+
+    Input archetype, non-multi-row (the common case - Smoke Detectors
+    etc.) is a thin pass-through: render_component() now owns its own
+    N/A / DTS / PBD status control and collapses itself to one line
+    when N/A, so there's nothing extra to do here.
+
+    Any other standalone archetype (Linked Child / Counter, or a
+    multi-row Input) doesn't have that built-in collapse, so it keeps
+    the older arrow-expand wrapper as a fallback. state =
     {"expanded": bool, "component": {...}}.
     """
+
+    if spec["kind"] == KIND_INPUT and not spec["multi_row"]:
+        return render_component(
+            spec, state["component"], apparatus_output_df,
+            parent_quantity=get_quantity_by_apparatus(results_so_far or [], spec.get("parent_key")),
+            project_info=project_info, key_prefix=key_prefix, show_label=True,
+        )
 
     arrow_col, name_col = st.columns([0.5, 4])
 
@@ -528,7 +739,7 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
         dirty = render_component(
             spec, state["component"], apparatus_output_df,
             parent_quantity=get_quantity_by_apparatus(results_so_far or [], spec.get("parent_key")),
-            key_prefix=key_prefix, show_label=False,
+            project_info=project_info, key_prefix=key_prefix, show_label=False,
         )
 
     return dirty
@@ -565,29 +776,25 @@ def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, war
 
 
 def _calculate_input_row(spec, determination_label, value, product_type_name, apparatus_output_df,
-                          project_info, results_so_far, warnings):
+                          project_info, results_so_far, warnings, variable_values=None):
 
     mode_key = MODE_LABEL_TO_KEY.get(determination_label)
 
     if mode_key == "formula":
 
-        # Every key in Project Info is automatically available to a
-        # formula under its own name (e.g. building_storeys) - so
-        # adding a new building-level input doesn't require touching
-        # this file. A small set of shorter aliases is kept for the
-        # existing calc_rules formulas written before this variable
-        # naming was standardized.
         variables = dict(project_info)
-        variables.setdefault("protected_area", project_info.get("building_area"))
-        variables.setdefault("storeys", project_info.get("building_storeys"))
-        variables.setdefault("floor_to_floor_height", project_info.get("building_floor_to_floor_height"))
-        variables.setdefault("risers", project_info.get("building_risers"))
+        for var_name, project_key in PROJECT_INFO_ALIASES.items():
+            variables.setdefault(var_name, project_info.get(project_key))
 
         if spec.get("parent_key"):
             variables["parent_quantity"] = get_quantity_by_apparatus(results_so_far, spec["parent_key"])
             parent_spacing = get_spacing_area_by_apparatus(results_so_far, spec["parent_key"])
             variables["parent_spacing_area"] = parent_spacing
-            variables["spacing_area"] = parent_spacing  # convenience alias matching existing calc_rules formulas
+            variables["spacing_area"] = parent_spacing
+
+        variables.update({k: v for k, v in (variable_values or {}).items() if v})
+
+        variables = resolve_default_variables(spec["formula_system"], spec["formula_component"], variables)
 
         parts = []
         for param_name in spec["formula_parameters"]:
@@ -685,6 +892,8 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
         return [result] if result else []
 
     # KIND_INPUT
+    if not spec["multi_row"] and comp_state.get("status", STATUS_NA) == STATUS_NA:
+        return []
     if spec["multi_row"]:
 
         table = comp_state.get("table")
@@ -704,6 +913,7 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
     result = _calculate_input_row(
         spec, comp_state.get("determination_type"), comp_state.get("value"), comp_state.get("product_type"),
         apparatus_output_df, project_info, results_so_far, warnings,
+        variable_values=comp_state.get("variable_values"),
     )
     return [result] if result else []
 
@@ -796,15 +1006,12 @@ def component_group_design_rows(cat_name, specs, group_state):
                     })
 
         else:
-            has_value = bool(comp_state.get("value"))
-            is_formula = comp_state.get("determination_type") == MODE_LABELS.get("formula")
             rows.append({
                 "Category": cat_name, "Subcategory": spec["label"],
-                "Status": "Configured" if (has_value or is_formula) else "Blank",
+                "Status": comp_state.get("status", "N/A"),
                 "Determination Type": comp_state.get("determination_type"),
                 "Value": comp_state.get("value"),
                 "Product Type": comp_state.get("product_type"),
                 "Hazard Rating": None,
             })
-
     return rows

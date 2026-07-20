@@ -106,6 +106,89 @@ def get_available_condition_values(system, component, parameter):
         .tolist()
     )
 
+def resolve_default_variables(system, component, variables):
+    """
+    Fills in any formula variable the caller hasn't supplied (missing
+    or None) using calc_rules rows tagged condition_value == "default"
+    under the same (system, component). This is the whole DTS
+    mechanism: a component's Formula-mode calculation gets whatever
+    constants the sheet has declared for it, with no per-apparatus
+    Python needed to wire it up.
+
+    A row named e.g. "default_risers" fills both a variable called
+    "default_risers" AND "risers" (the "default_" prefix stripped),
+    so a fallback constant can seamlessly stand in for a same-named
+    Project Info field (e.g. Risers) without the sheet needing a
+    duplicate row - this is the "default value of 1" case.
+
+    Values that are themselves "FORMULA: ..." strings are evaluated
+    against the plain constants resolved in the same pass, so one
+    default can reference another within the same component. Never
+    overrides a value the caller already supplied.
+    """
+
+    df = get_calc_rules()
+
+    defaults = df[
+        (df["system"] == system)
+        & (df["component"] == component)
+        & (df["condition_value"] == "default")
+    ]
+
+    if defaults.empty:
+        return variables
+
+    resolved = dict(variables)
+
+    def _fill(parameter_name, value):
+        for name in {parameter_name, parameter_name.removeprefix("default_")}:
+            if resolved.get(name) is None:
+                resolved[name] = value
+
+    formula_rows = []
+    for _, row in defaults.iterrows():
+        raw = row["value"]
+        if isinstance(raw, str) and raw.strip().startswith("FORMULA:"):
+            formula_rows.append(row)
+            continue
+        _fill(row["parameter"], raw)
+
+    for row in formula_rows:
+        value = evaluate_formula(row["value"], resolved)
+        if value is not None:
+            _fill(row["parameter"], value)
+
+    return resolved
+
+def get_notes(system, component, parameter, condition_value=None):
+    """
+    Returns the calc_rules "notes" cell for a parameter - explanatory
+    text (AS clause, assumption caveat, etc.) shown in the UI's
+    per-component info panel. Mirrors get_parameter()'s matching and
+    "default" fallback logic exactly, so the note always corresponds
+    to the value actually being used.
+    """
+    df = get_calc_rules()
+
+    matches = df[
+        (df["system"] == system)
+        & (df["component"] == component)
+        & (df["parameter"] == parameter)
+    ]
+
+    if matches.empty:
+        return None
+
+    if condition_value is not None:
+        specific = matches[matches["condition_value"] == condition_value]
+        if not specific.empty:
+            return specific.iloc[0].get("notes")
+
+    fallback = matches[matches["condition_value"] == "default"]
+    if not fallback.empty:
+        return fallback.iloc[0].get("notes")
+
+    return matches.iloc[0].get("notes")
 
 # ==========================================================
 # Safe Formula Evaluation
@@ -140,6 +223,26 @@ def _validate_ast(node):
             if not isinstance(child.func, ast.Name) or child.func.id not in _ALLOWED_FUNCTIONS:
                 raise ValueError(f"Disallowed function call in formula: {ast.dump(child)}")
 
+def formula_variable_names(formula_string):
+    """
+    Returns the set of variable names a "FORMULA: ..." string
+    references, excluding the allowed function names (SQRT, MAX...).
+    Lets the UI figure out, purely from the formula text already in
+    calc_rules, which inputs a given calculation actually needs -
+    no separate declaration of "this formula needs X and Y" required
+    anywhere else.
+    """
+    if not isinstance(formula_string, str) or not formula_string.startswith("FORMULA:"):
+        return set()
+    expression = formula_string[len("FORMULA:"):].strip()
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError:
+        return set()
+    return {
+        node.id for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and node.id not in _ALLOWED_FUNCTIONS
+    }
 
 def evaluate_formula(formula_string, variables):
     """
