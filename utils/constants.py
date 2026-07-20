@@ -16,7 +16,7 @@ ARCHIVE_DIR = ROOT_DIR / "database" / "archive"
 EXPORT_DIR = ROOT_DIR / "exports"
 REPORT_DIR = ROOT_DIR / "reports"
 
-CARBON_DATABASE_FILE = DATABASE_DIR / "ECDataBase13July26.xlsx"
+CARBON_DATABASE_FILE = DATABASE_DIR / "ARUP_v2.xlsx"
 STANDARDS_DATABASE_FILE = DATABASE_DIR / "standards_database_master.xlsx"
 USER_INPUT_DATABASE_FILE = DATABASE_DIR / "user_input_database.xlsx"
 CALC_RULES_DATABASE_FILE = DATABASE_DIR / "Standards_Calc_Database.xlsx"

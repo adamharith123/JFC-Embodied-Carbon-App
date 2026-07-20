@@ -51,10 +51,22 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
                           Product Output.
     """
 
-    carbon_a1_3 = float(carbon_factors_row["A1-3"]) * equivalent_quantity
-    carbon_a4 = float(carbon_factors_row["A4"]) * equivalent_quantity
-    carbon_a5 = float(carbon_factors_row["A5"]) * equivalent_quantity
-    carbon_total = float(carbon_factors_row["Total (A1-3 + A4 + A5)"]) * equivalent_quantity
+    def _factor(value):
+        # Some database rows leave A4/A5 blank rather than 0 (e.g.
+        # products with no declared transport or end-of-life stage) -
+        # treat a missing factor as 0 rather than letting NaN propagate
+        # into the results table.
+        try:
+            if value is None or (isinstance(value, float) and value != value):
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    carbon_a1_3 = _factor(carbon_factors_row["A1-3"]) * equivalent_quantity
+    carbon_a4 = _factor(carbon_factors_row["A4"]) * equivalent_quantity
+    carbon_a5 = _factor(carbon_factors_row["A5"]) * equivalent_quantity
+    carbon_total = _factor(carbon_factors_row["Total (A1-3 + A4 + A5)"]) * equivalent_quantity
 
     return {
         "A1-A3": carbon_a1_3,
@@ -64,14 +76,34 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
     }
 
 
+def _normalise_apparatus_name(name):
+    """Whitespace/case-insensitive key for matching apparatus names."""
+    return str(name).strip().casefold()
+
+
+# Product Type values that mean "no real variant chosen yet" - either
+# genuinely blank, or the literal placeholder text some rows use
+# while real product data hasn't been sourced. Both should behave
+# the same way in the UI: a single "Standard" option, not a dropdown
+# with a meaningless placeholder value in it.
+_PLACEHOLDER_PRODUCT_TYPES = {"", "demo type"}
+
+
 def find_carbon_factors_row(apparatus_output_df, apparatus_name):
     """
     Looks up the generic (apparatus-level average) carbon factors
     for a given apparatus name from the Apparatus Output sheet.
+    Matching is case/whitespace-insensitive, since the database and
+    the app's own component names don't always agree on casing
+    (e.g. "Heat Detector" vs "Heat detector").
     """
 
+    if apparatus_output_df is None or apparatus_output_df.empty:
+        return None
+
+    target = _normalise_apparatus_name(apparatus_name)
     matching_rows = apparatus_output_df[
-        apparatus_output_df["Apparatus"] == apparatus_name
+        apparatus_output_df["Apparatus"].apply(_normalise_apparatus_name) == target
     ]
 
     if matching_rows.empty:
@@ -82,47 +114,90 @@ def find_carbon_factors_row(apparatus_output_df, apparatus_name):
 
 def find_product_carbon_factors_row(apparatus_output_df, apparatus_name, product_type_name):
     """
-    Looks up a specific branded product's carbon factors from the
+    Looks up a specific product variant's carbon factors from the
     Apparatus Output sheet, filtered to rows matching both the
     apparatus and the specific Product Type.
+
+    Apparatus name matching is case/whitespace-insensitive (see
+    find_carbon_factors_row). Most apparatus have a single row whose
+    Product Type is blank or the literal placeholder "Demo Type" (no
+    real variant yet) - get_available_product_types() returns
+    "Standard" as the placeholder option for those, so here a
+    "Standard" selection matches any placeholder-Product-Type row
+    rather than requiring an exact "Standard" text match that will
+    never exist in the data.
     """
 
     if apparatus_output_df is None or apparatus_output_df.empty:
         return None
 
+    if "Product Type" not in apparatus_output_df.columns:
+        return find_carbon_factors_row(apparatus_output_df, apparatus_name)
+
+    target = _normalise_apparatus_name(apparatus_name)
     matching_rows = apparatus_output_df[
-        (apparatus_output_df["Apparatus"] == apparatus_name)
-        & (apparatus_output_df["Product Type"] == product_type_name)
+        apparatus_output_df["Apparatus"].apply(_normalise_apparatus_name) == target
     ]
 
     if matching_rows.empty:
         return None
 
-    return matching_rows.iloc[0]
+    product_types = matching_rows["Product Type"].fillna("").astype(str).str.strip()
+    is_placeholder = product_types.str.casefold().isin(_PLACEHOLDER_PRODUCT_TYPES)
+    has_real_variants = (~is_placeholder).any()
+
+    if not has_real_variants:
+        return matching_rows.iloc[0]
+
+    selected = str(product_type_name).strip()
+    match = matching_rows[product_types == selected]
+
+    if match.empty:
+        return None
+
+    return match.iloc[0]
 
 
 def get_available_product_types(apparatus_output_df, apparatus_name):
     """
     Returns the list of Product Type names available for a given
-    apparatus, read from the Apparatus Output sheet - e.g. the
-    specific branded components that exist for "Smoke Detector".
+    apparatus, read from the Apparatus Output sheet.
+
+    Most apparatus have exactly one row whose Product Type is blank
+    or the literal placeholder "Demo Type" - for those, return a
+    single placeholder option ("Standard") so the dropdown has
+    something selectable that isn't confusing filler text. A handful
+    of apparatus (e.g. "Sprinkler head", "Illuminated exit sign")
+    genuinely have multiple real named variants - for those, return
+    the real variant names instead.
     """
 
     if apparatus_output_df is None or apparatus_output_df.empty:
         return []
 
+    if "Product Type" not in apparatus_output_df.columns:
+        target = _normalise_apparatus_name(apparatus_name)
+        matching_rows = apparatus_output_df[
+            apparatus_output_df["Apparatus"].apply(_normalise_apparatus_name) == target
+        ]
+        return ["Standard"] if not matching_rows.empty else []
+
+    target = _normalise_apparatus_name(apparatus_name)
     matching_rows = apparatus_output_df[
-        apparatus_output_df["Apparatus"] == apparatus_name
+        apparatus_output_df["Apparatus"].apply(_normalise_apparatus_name) == target
     ]
 
-    return (
-        matching_rows["Product Type"]
-        .dropna()
-        .astype(str)
-        .sort_values()
-        .unique()
-        .tolist()
+    if matching_rows.empty:
+        return []
+
+    product_types = matching_rows["Product Type"].fillna("").astype(str).str.strip()
+    real_types = sorted(
+        set(
+            product_types[~product_types.str.casefold().isin(_PLACEHOLDER_PRODUCT_TYPES)]
+        )
     )
+
+    return real_types if real_types else ["Standard"]
 
 import math
 

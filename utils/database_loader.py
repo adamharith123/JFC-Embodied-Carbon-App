@@ -240,9 +240,12 @@ def load_user_input_database():
             "Database",
         ),
 
-        "user_inputs": load_sheet(
-            USER_INPUT_DATABASE_FILE,
-            "User Inputs",
+        # The supplied workbook uses the worksheet name "Input".
+        # Keep the legacy "User Inputs" fallback for older branches.
+        "user_inputs": (
+            load_sheet(USER_INPUT_DATABASE_FILE, "Input")
+            if "Input" in get_workbook_sheet_names(USER_INPUT_DATABASE_FILE)
+            else load_sheet(USER_INPUT_DATABASE_FILE, "User Inputs")
         ),
 
     }
@@ -256,7 +259,7 @@ def load_all_databases():
 
     return {
 
-        "carbon": load_carbon_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE)),
+        "carbon": load_carbon_database(_mtime=_file_mtime(CARBON_DATABASE_FILE)),
 
         "standards": load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE)),
 
@@ -320,13 +323,21 @@ def get_building_classes():
 
     first_col = df.columns[0]
 
-    return (
+    classes = (
         df[first_col]
         .dropna()
         .astype(str)
-        .unique()
-        .tolist()
+        .str.strip()
     )
+
+    # Exclude the final reference row and accidental blank/header values.
+    classes = classes[
+        ~classes.str.casefold().isin(
+            {"reference", "building class", "nan", ""}
+        )
+    ]
+
+    return classes.drop_duplicates().tolist()
 
 def get_standards_list():
     """
