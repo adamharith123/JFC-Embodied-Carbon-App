@@ -442,10 +442,13 @@ if st.session_state.test_step == 1:
                     "assessment_notes": assessment_notes,
                     "building_class": building_classes[0] if building_classes else "",
                     "version_notes": selected_existing_version["version_notes"] or "",
+                    "floor_area_per_storey": None,
                     "building_storeys": None,
+                    "building_effective_height": None,
                     "building_floor_to_floor_height": None,
                     "building_risers": None,
                     "building_exits_per_storey": None,
+                    "sprinkler_hazard_classification": None,
                 }
 
                 st.session_state.test_categories = load_categories_from_design_rows(design_rows)
@@ -472,11 +475,23 @@ if st.session_state.test_step == 1:
             key="test_building_class",
         )
 
-        with st.expander("Additional Building Inputs (used by some systems)"):
+        with st.expander(
+            "Additional Building Inputs (from User Input List)",
+            expanded=True,
+        ):
 
-            col1, col2, col3, col4 = st.columns(4)
+            row1_col1, row1_col2, row1_col3 = st.columns(3)
 
-            with col1:
+            with row1_col1:
+                floor_area_per_storey = st.number_input(
+                    "Floor Area per Storey (m²)",
+                    min_value=0.0,
+                    step=1.0,
+                    value=float(building_area) if building_area else 0.0,
+                    key="test_floor_area_per_storey",
+                )
+
+            with row1_col2:
                 building_storeys = st.number_input(
                     "Number of Storeys",
                     min_value=0,
@@ -484,15 +499,25 @@ if st.session_state.test_step == 1:
                     key="test_building_storeys",
                 )
 
-            with col2:
+            with row1_col3:
+                building_effective_height = st.number_input(
+                    "Effective Height (m)",
+                    min_value=0.0,
+                    step=0.1,
+                    key="test_building_effective_height",
+                )
+
+            row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
+
+            with row2_col1:
                 building_floor_to_floor_height = st.number_input(
-                    "Floor to Floor Height (m)",
+                    "Floor-to-Floor Height (m)",
                     min_value=0.0,
                     step=0.1,
                     key="test_building_ftf_height",
                 )
 
-            with col3:
+            with row2_col2:
                 building_risers = st.number_input(
                     "Number of Risers",
                     min_value=0,
@@ -500,13 +525,27 @@ if st.session_state.test_step == 1:
                     key="test_building_risers",
                 )
 
-            with col4:
+            with row2_col3:
                 building_exits_per_storey = st.number_input(
                     "Number of Exits per Storey",
                     min_value=0,
                     step=1,
                     key="test_building_exits_per_storey",
                 )
+
+            with row2_col4:
+                sprinkler_hazard_classification = st.selectbox(
+                    "Sprinkler Hazard Classification",
+                    [
+                        "Light Hazard",
+                        "Ordinary Hazard",
+                        "High Hazard",
+                        "User-defined",
+                    ],
+                    index=2,
+                    key="test_sprinkler_hazard_classification",
+                )
+
 
         version_notes = st.text_area(
             "Version Notes",
@@ -535,10 +574,13 @@ if st.session_state.test_step == 1:
                     "assessment_notes": assessment_notes,
                     "building_class": building_class,
                     "version_notes": version_notes,
+                    "floor_area_per_storey": floor_area_per_storey,
                     "building_storeys": building_storeys,
+                    "building_effective_height": building_effective_height,
                     "building_floor_to_floor_height": building_floor_to_floor_height,
                     "building_risers": building_risers,
                     "building_exits_per_storey": building_exits_per_storey,
+                    "sprinkler_hazard_classification": sprinkler_hazard_classification,
                 }
 
                 st.session_state.test_categories = fresh_categories()
@@ -1391,3 +1433,4 @@ else:
                 st.plotly_chart(fig, use_container_width=True)
 
     render_footer()
+    
