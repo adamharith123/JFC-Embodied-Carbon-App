@@ -51,10 +51,22 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
                           Product Output.
     """
 
-    carbon_a1_3 = float(carbon_factors_row["A1-3"]) * equivalent_quantity
-    carbon_a4 = float(carbon_factors_row["A4"]) * equivalent_quantity
-    carbon_a5 = float(carbon_factors_row["A5"]) * equivalent_quantity
-    carbon_total = float(carbon_factors_row["Total (A1-3 + A4 + A5)"]) * equivalent_quantity
+    def _factor(value):
+        # Some database rows leave A4/A5 blank rather than 0 (e.g.
+        # products with no declared transport or end-of-life stage) -
+        # treat a missing factor as 0 rather than letting NaN propagate
+        # into the results table.
+        try:
+            if value is None or (isinstance(value, float) and value != value):
+                return 0.0
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    carbon_a1_3 = _factor(carbon_factors_row["A1-3"]) * equivalent_quantity
+    carbon_a4 = _factor(carbon_factors_row["A4"]) * equivalent_quantity
+    carbon_a5 = _factor(carbon_factors_row["A5"]) * equivalent_quantity
+    carbon_total = _factor(carbon_factors_row["Total (A1-3 + A4 + A5)"]) * equivalent_quantity
 
     return {
         "A1-A3": carbon_a1_3,
