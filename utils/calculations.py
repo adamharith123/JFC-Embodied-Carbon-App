@@ -10,6 +10,17 @@ No Streamlit code should be placed in this file.
 import pandas as pd
 
 
+def _find_column(row, *candidates):
+    """See utils/proposed_design_calculations.py::_find_column - same
+    tolerance for the renamed A1-3/A4/A5 columns, kept local here so
+    this module still doesn't depend on Streamlit or its sibling
+    module."""
+    for name in candidates:
+        if name in row.index:
+            return row[name]
+    return None
+
+
 # ==========================================================
 # Existing Design Calculation
 # ==========================================================
@@ -51,10 +62,10 @@ def calculate_existing_design(existing_design_df, apparatus_output_df):
 
         match = match.iloc[0]
 
-        a13 = float(match["A1-3"]) * quantity
-        a4 = float(match["A4"]) * quantity
-        a5 = float(match["A5"]) * quantity
-        total = float(match["Total (A1-3 + A4 + A5)"]) * quantity
+        a13 = float(_find_column(match, "A1-3", "A1-3 (kg CO2e)") or 0) * quantity
+        a4 = float(_find_column(match, "A4", "A4 (kg CO2e)") or 0) * quantity
+        a5 = float(_find_column(match, "A5", "A5 (kg CO2e)") or 0) * quantity
+        total = float(_find_column(match, "Total (A1-3 + A4 + A5)", "Total") or 0) * quantity
 
         results.append(
             {

@@ -6,6 +6,8 @@ descriptive variable names, so this logic can be read, checked, and
 changed without needing to touch the UI file.
 """
 
+import pandas as pd
+
 
 def calculate_equivalent_quantity(determination_type, input_value, building_area_m2):
     """
@@ -39,6 +41,21 @@ def calculate_equivalent_quantity(determination_type, input_value, building_area
     return None
 
 
+def _find_column(row, *candidates):
+    """
+    Returns the value of the first column name in `candidates` that
+    actually exists on `row`. The database's carbon-factor column
+    names have changed before (e.g. "A1-3" -> "A1-3 (kg CO2e)") -
+    this keeps the calculation working across either naming instead
+    of hard-failing with a KeyError the next time a column gets
+    renamed.
+    """
+    for name in candidates:
+        if name in row.index:
+            return row[name]
+    return None
+
+
 def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
     """
     Multiplies an equivalent quantity by one row of per-unit
@@ -63,10 +80,12 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
         except (TypeError, ValueError):
             return 0.0
 
-    carbon_a1_3 = _factor(carbon_factors_row["A1-3"]) * equivalent_quantity
-    carbon_a4 = _factor(carbon_factors_row["A4"]) * equivalent_quantity
-    carbon_a5 = _factor(carbon_factors_row["A5"]) * equivalent_quantity
-    carbon_total = _factor(carbon_factors_row["Total (A1-3 + A4 + A5)"]) * equivalent_quantity
+    carbon_a1_3 = _factor(_find_column(carbon_factors_row, "A1-3", "A1-3 (kg CO2e)")) * equivalent_quantity
+    carbon_a4 = _factor(_find_column(carbon_factors_row, "A4", "A4 (kg CO2e)")) * equivalent_quantity
+    carbon_a5 = _factor(_find_column(carbon_factors_row, "A5", "A5 (kg CO2e)")) * equivalent_quantity
+    carbon_total = _factor(_find_column(
+        carbon_factors_row, "Total (A1-3 + A4 + A5)", "Total"
+    )) * equivalent_quantity
 
     return {
         "A1-A3": carbon_a1_3,
@@ -198,6 +217,102 @@ def get_available_product_types(apparatus_output_df, apparatus_name):
     )
 
     return real_types if real_types else ["Standard"]
+
+
+# ==========================================================
+# FRL (min) Lookup - Category 5 Wall Assemblies
+# ==========================================================
+#
+# Decoupled from Product Type on purpose: Product Type selects the
+# material/grade (e.g. a concrete grade), FRL(min) selects a required
+# fire-resistance rating - the frl_reference sheet is what converts
+# that combination into a thickness (Concrete/Masonry/Speed Panel,
+# converted to a carbon quantity via a standard reference density) or
+# a layer count (Plasterboard, whose per-m² factor is already one
+# board layer). Required FRL is always a direct user override - no
+# NCC lookup is ever performed here.
+
+def get_frl_options(frl_reference_df, apparatus_name, product_type_name):
+    """
+    Returns the sorted list of FRL(min) values available for a given
+    apparatus (+ product type, when the apparatus's thickness table
+    depends on it, e.g. Plasterboard's board thickness).
+    """
+
+    if frl_reference_df is None or frl_reference_df.empty:
+        return []
+
+    target = _normalise_apparatus_name(apparatus_name)
+    rows = frl_reference_df[
+        frl_reference_df["Apparatus"].apply(_normalise_apparatus_name) == target
+    ]
+
+    if rows.empty:
+        return []
+
+    product_types = rows["Product Type"].fillna("").astype(str).str.strip()
+    row_is_general = product_types == ""
+
+    if product_type_name and (product_types == str(product_type_name).strip()).any():
+        rows = rows[(product_types == str(product_type_name).strip()) | row_is_general]
+    else:
+        rows = rows[row_is_general]
+
+    return sorted(int(v) for v in rows["FRL (min)"].dropna().unique())
+
+
+def resolve_frl_multiplier(frl_reference_df, apparatus_name, product_type_name, frl_value):
+    """
+    Returns (multiplier, detail_text) for converting an entered wall
+    area (m²) into the quantity the apparatus's carbon factor expects,
+    or None if no matching row is found.
+
+    - Thickness-based rows (Concrete/Masonry/Speed Panel): the
+      Apparatus Output factor is per kg, so multiplier = thickness(m)
+      x density(kg/m3), giving kg per m² of wall.
+    - Layer-based rows (Plasterboard): the Apparatus Output factor is
+      already per m² of a single board layer, so multiplier = layer
+      count, giving m² of board per m² of wall.
+    """
+
+    if frl_reference_df is None or frl_reference_df.empty or frl_value is None:
+        return None
+
+    target = _normalise_apparatus_name(apparatus_name)
+    rows = frl_reference_df[
+        frl_reference_df["Apparatus"].apply(_normalise_apparatus_name) == target
+    ]
+
+    if rows.empty:
+        return None
+
+    product_types = rows["Product Type"].fillna("").astype(str).str.strip()
+    selected = str(product_type_name).strip() if product_type_name else ""
+
+    matches = rows[rows["FRL (min)"].astype(float) == float(frl_value)]
+    if product_type_name:
+        exact = matches[product_types.loc[matches.index] == selected]
+        if not exact.empty:
+            matches = exact
+        else:
+            matches = matches[product_types.loc[matches.index] == ""]
+
+    if matches.empty:
+        return None
+
+    row = matches.iloc[0]
+
+    layers = row.get("Layers")
+    if pd.notna(layers):
+        return float(layers), f"{int(layers)} board layer(s)"
+
+    thickness_mm = row.get("Thickness (mm)")
+    density = row.get("Density (kg/m3)")
+    if pd.notna(thickness_mm) and pd.notna(density):
+        thickness_m = float(thickness_mm) / 1000.0
+        return thickness_m * float(density), f"{thickness_mm:g}mm thick @ {density:g} kg/m³"
+
+    return None
 
 import math
 
