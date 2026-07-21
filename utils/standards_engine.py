@@ -47,6 +47,32 @@ def get_calc_rules():
     return load_calc_rules(_mtime=_file_mtime(CALC_RULES_DATABASE_FILE))
 
 
+@st.cache_data
+def load_frl_reference(_mtime=None):
+    """
+    Reads the "frl_reference" sheet - the FRL(min) -> construction
+    thickness/layer-count lookup used by Category 5 Wall Assemblies
+    (Concrete, Masonry, Speed Panel, Fire Resistant Plasterboard).
+    Kept as its own small sheet in the same workbook as calc_rules/
+    ui_structure so it's editable the same way (add a row, no code
+    change) - see utils/proposed_design_calculations.py for how it's
+    used to convert an area + FRL selection into a carbon quantity.
+    """
+    empty = pd.DataFrame(
+        columns=["Apparatus", "Product Type", "FRL (min)", "Thickness (mm)", "Layers", "Density (kg/m3)"]
+    )
+    if not CALC_RULES_DATABASE_FILE.exists():
+        return empty
+    try:
+        return pd.read_excel(CALC_RULES_DATABASE_FILE, sheet_name="frl_reference")
+    except ValueError:
+        return empty
+
+
+def get_frl_reference():
+    return load_frl_reference(_mtime=_file_mtime(CALC_RULES_DATABASE_FILE))
+
+
 # ==========================================================
 # Lookup
 # ==========================================================

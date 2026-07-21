@@ -31,6 +31,7 @@ from utils.standards_engine import (
     calculate_quantity,
     get_available_condition_values,
     get_extinguisher_requirement,
+    get_frl_reference,
 )
 from utils.component_groups import (
     component_spec,
@@ -298,6 +299,7 @@ if "test_is_new_unsaved_draft" not in st.session_state:
     st.session_state.test_is_new_unsaved_draft = False
 
 carbon_db = load_carbon_database()
+frl_reference_df = get_frl_reference()
 
 # ==========================================================
 # STEP 1: Project Information
@@ -635,6 +637,7 @@ else:
                     group_results = calculate_component_group(
                         specs, sub_state, apparatus_output_df,
                         project_info=info, results_so_far=results, warnings=warnings,
+                        frl_reference_df=frl_reference_df,
                     )
 
                     results.extend(group_results)
@@ -646,6 +649,7 @@ else:
                     new_results = calculate_component(
                         spec, sub_state["component"], apparatus_output_df,
                         project_info=info, results_so_far=results, warnings=warnings,
+                        frl_reference_df=frl_reference_df,
                     )
 
                     results.extend(new_results)
@@ -1062,6 +1066,7 @@ else:
                     key_prefix=f"group_{selected}_{sub_name}",
                     results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
                     project_info=info,
+                    frl_reference_df=frl_reference_df,
                     )
 
                 if result == "toggled":
@@ -1082,6 +1087,7 @@ else:
                     key_prefix=f"single_{selected}_{sub_name}",
                     results_so_far=st.session_state.test_results_df.to_dict("records") if not st.session_state.test_results_df.empty else [],
                     project_info=info,
+                    frl_reference_df=frl_reference_df,
                 )
 
                 if result == "toggled":

@@ -39,6 +39,8 @@ from utils.proposed_design_calculations import (
     calculate_component_carbon,
     find_product_carbon_factors_row,
     get_available_product_types,
+    get_frl_options,
+    resolve_frl_multiplier,
 )
 from utils.standards_engine import (
     calculate_quantity as evaluate_calc_rules_formula,
@@ -101,6 +103,7 @@ def component_spec(
     formula_parameters=None,
     counted_apparatus=None,
     manual_allowed=True,
+    frl_lookup=False,
 ):
     """
     Declares one component.
@@ -145,6 +148,20 @@ def component_spec(
     figure if it used Grid Spacing or Coverage Area mode).
 
     disclaimer        : optional warning caption shown under the input
+
+    frl_lookup        : (KIND_INPUT, non-multi-row only) if True,
+                         renders a separate "Required FRL (min)"
+                         selector next to Value/Product Type, and
+                         converts the entered quantity into a carbon
+                         quantity via the frl_reference sheet before
+                         pricing it against Product Type's carbon
+                         factor - see get_frl_options/
+                         resolve_frl_multiplier in
+                         utils/proposed_design_calculations.py. Used
+                         by Category 5 Wall Assemblies (Concrete,
+                         Masonry, Speed Panel, Fire Resistant
+                         Plasterboard). FRL is a direct user override -
+                         nothing here derives it from the NCC.
     """
     return {
         "key": key,
@@ -163,6 +180,7 @@ def component_spec(
         "formula_parameters": formula_parameters or [],
         "counted_apparatus": counted_apparatus or [],
         "manual_allowed": manual_allowed,
+        "frl_lookup": frl_lookup,
     }
 
 
@@ -221,6 +239,7 @@ def init_component_state(spec):
             "determination_type": MODE_LABELS[spec["modes"][0]],
             "value": None,
             "product_type": None,
+            "frl_min": None,
         }
 
     if kind == KIND_LINKED_CHILD:
@@ -316,7 +335,8 @@ def _render_variable_field(spec, parameter_name, comp_state, key_prefix, project
 # Rendering
 # ==========================================================
 
-def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, project_info=None, key_prefix="", show_label=True):
+def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None, project_info=None, key_prefix="", show_label=True,
+                      frl_reference_df=None):
     """
     Renders the widgets for a single component and mutates comp_state
     in place. Returns True if anything changed.
@@ -520,10 +540,15 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     else:
 
+        show_frl = bool(spec.get("frl_lookup"))
+        show_det_col = is_dts or show_mode_dropdown
+        n_cols = (1 if show_det_col else 0) + 2 + (1 if show_frl else 0)
+        cols = st.columns(n_cols)
+        col_i = 0
+
         if is_dts:
             dts_mode_options = [m for m in mode_options if m != MODE_LABELS["quantity"]] or mode_options
-            col1, col2, col3 = st.columns(3)
-            with col1:
+            with cols[col_i]:
                 if comp_state.get("determination_type") in dts_mode_options:
                     default_index = dts_mode_options.index(comp_state["determination_type"])
                 elif MODE_LABELS["formula"] in dts_mode_options:
@@ -536,22 +561,22 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                     key=f"{key_prefix}_{spec['key']}_det",
                 )
             st.caption("DTS: Total Quantity isn't offered here - every other method traces to an AS Calc Sheet default.")
+            col_i += 1
         elif show_mode_dropdown:
-            col1, col2, col3 = st.columns(3)
-            with col1:
+            with cols[col_i]:
                 new_mode = st.selectbox(
                     "Determination Type", mode_options,
                     index=mode_options.index(comp_state["determination_type"]),
                     key=f"{key_prefix}_{spec['key']}_det",
                 )
+            col_i += 1
         else:
             new_mode = mode_options[0]
-            col2, col3 = st.columns(2)
 
         mode_key = MODE_LABEL_TO_KEY.get(new_mode)
         is_formula = mode_key == "formula"
 
-        with col2:
+        with cols[col_i]:
             if is_formula:
                 st.number_input(
                     "Value — calculated automatically from AS Calc Sheet", value=0.0, disabled=True,
@@ -581,14 +606,15 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 values["grid_spacing_side"] = new_value
             else:
                 unit_label = spec["units"][0] if spec["units"] else "units"
-                value_label = "Value" if show_mode_dropdown else f"Value ({unit_label})"
+                value_label = "Value" if show_det_col else f"Value ({unit_label})"
                 new_value = st.number_input(
                     value_label, min_value=0.0, step=1.0,
                     value=float(comp_state.get("value") or 0.0),
                     key=f"{key_prefix}_{spec['key']}_value",
                 )
+        col_i += 1
 
-        with col3:
+        with cols[col_i]:
             new_product = st.selectbox(
                 "Product Type", ["(none selected)"] + product_options,
                 index=(
@@ -597,14 +623,29 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 ),
                 key=f"{key_prefix}_{spec['key']}_product",
             )
+        col_i += 1
 
         resolved_product = None if new_product == "(none selected)" else new_product
 
+        new_frl = comp_state.get("frl_min")
+        if show_frl:
+            frl_options = get_frl_options(frl_reference_df, spec["apparatus"], resolved_product)
+            frl_choices = ["(none selected)"] + [str(f) for f in frl_options]
+            current = str(comp_state.get("frl_min")) if comp_state.get("frl_min") is not None else "(none selected)"
+            with cols[col_i]:
+                new_frl_choice = st.selectbox(
+                    "Required FRL (min)", frl_choices,
+                    index=frl_choices.index(current) if current in frl_choices else 0,
+                    key=f"{key_prefix}_{spec['key']}_frl",
+                )
+            new_frl = None if new_frl_choice == "(none selected)" else int(new_frl_choice)
+
         if (new_mode != comp_state.get("determination_type") or new_value != comp_state.get("value")
-                or resolved_product != comp_state.get("product_type")):
+                or resolved_product != comp_state.get("product_type") or new_frl != comp_state.get("frl_min")):
             comp_state["determination_type"] = new_mode
             comp_state["value"] = new_value
             comp_state["product_type"] = resolved_product
+            comp_state["frl_min"] = new_frl
             dirty = True
 
         if is_formula:
@@ -662,7 +703,8 @@ def _render_info_panel(spec, formula_notes=None):
                 if note:
                     st.caption(f"**{param_name}**: {note}")
 
-def render_component_group(group_label, specs, group_state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None):
+def render_component_group(group_label, specs, group_state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None,
+                            frl_reference_df=None):
     """
     Renders an expandable group containing multiple components.
     Returns "toggled" if the expand arrow was clicked (caller should
@@ -702,13 +744,14 @@ def render_component_group(group_label, specs, group_state, apparatus_output_df,
             changed = render_component(
                 spec, comp_state, apparatus_output_df,
                 parent_quantity=parent_qty, project_info=project_info, key_prefix=key_prefix,
+                frl_reference_df=frl_reference_df,
             )
             dirty = dirty or changed
 
     return dirty
 
 
-def render_single_component(spec, state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None):
+def render_single_component(spec, state, apparatus_output_df, key_prefix, results_so_far=None, project_info=None, frl_reference_df=None):
     """
     Renders one standalone component directly under its own nav entry.
 
@@ -728,6 +771,7 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
             spec, state["component"], apparatus_output_df,
             parent_quantity=get_quantity_by_apparatus(results_so_far or [], spec.get("parent_key")),
             project_info=project_info, key_prefix=key_prefix, show_label=True,
+            frl_reference_df=frl_reference_df,
         )
 
     arrow_col, name_col = st.columns([0.5, 4])
@@ -750,6 +794,7 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
             spec, state["component"], apparatus_output_df,
             parent_quantity=get_quantity_by_apparatus(results_so_far or [], spec.get("parent_key")),
             project_info=project_info, key_prefix=key_prefix, show_label=False,
+            frl_reference_df=frl_reference_df,
         )
 
     return dirty
@@ -759,7 +804,8 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
 # Calculation
 # ==========================================================
 
-def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=None):
+def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=None,
+                      carbon_quantity=None, frl_min=None, frl_detail=None):
 
     if not isinstance(product_type_name, str) or not product_type_name.strip():
         warnings.append(f"{spec['label']}: no Product Type selected - not included.")
@@ -771,9 +817,11 @@ def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, war
         warnings.append(f"{spec['label']}: Product Type '{product_type_name}' not found for '{spec['apparatus']}'.")
         return None
 
-    carbon_result = calculate_component_carbon(quantity, carbon_factors_row)
+    carbon_result = calculate_component_carbon(
+        carbon_quantity if carbon_quantity is not None else quantity, carbon_factors_row
+    )
 
-    return {
+    result = {
         "Apparatus": spec["label"],
         "Product Type": product_type_name,
         "Quantity": quantity,
@@ -784,9 +832,42 @@ def _finalize_result(spec, quantity, product_type_name, apparatus_output_df, war
         "Total": carbon_result["Total"],
     }
 
+    if frl_min is not None:
+        result["Required FRL (min)"] = frl_min
+    if frl_detail:
+        result["FRL Basis"] = frl_detail
+
+    return result
+
+
+def _apply_frl_lookup(spec, quantity, product_type_name, frl_reference_df, frl_min, warnings):
+    """
+    For a Wall Assembly component (spec["frl_lookup"] is True), turns
+    the entered wall area into the quantity the carbon factor
+    actually expects, using the frl_reference sheet. Returns
+    (carbon_quantity, frl_detail_text), or None if it can't be
+    resolved (a warning is appended in that case).
+    """
+
+    if frl_min is None:
+        warnings.append(f"{spec['label']}: select a Required FRL (min) - not included.")
+        return None
+
+    resolved = resolve_frl_multiplier(frl_reference_df, spec["apparatus"], product_type_name, frl_min)
+
+    if resolved is None:
+        warnings.append(
+            f"{spec['label']}: no FRL reference data for FRL {frl_min} with the selected Product Type - not included."
+        )
+        return None
+
+    multiplier, detail = resolved
+    return quantity * multiplier, detail
+
 
 def _calculate_input_row(spec, determination_label, value, product_type_name, apparatus_output_df,
-                          project_info, results_so_far, warnings, variable_values=None):
+                          project_info, results_so_far, warnings, variable_values=None,
+                          frl_reference_df=None, frl_min=None):
 
     mode_key = MODE_LABEL_TO_KEY.get(determination_label)
 
@@ -821,38 +902,52 @@ def _calculate_input_row(spec, determination_label, value, product_type_name, ap
         if not parts:
             return None
 
-        return _finalize_result(spec, sum(parts), product_type_name, apparatus_output_df, warnings)
-
-    if not value or value <= 0:
-        return None
-
-    building_area_m2 = project_info.get("building_area")
-    spacing_area_out = None
-
-    if mode_key == "quantity":
-        quantity = value
-
-    elif mode_key == "grid_spacing":
-        if not building_area_m2 or building_area_m2 <= 0:
-            warnings.append(f"{spec['label']}: Building Area must be set to use Grid Spacing.")
-            return None
-        quantity = building_area_m2 / (value ** 2)
-        spacing_area_out = value ** 2
-
-    elif mode_key == "coverage_area":
-        if not building_area_m2 or building_area_m2 <= 0:
-            warnings.append(f"{spec['label']}: Building Area must be set to use Coverage Area.")
-            return None
-        quantity = building_area_m2 / value
-        spacing_area_out = value
+        quantity = sum(parts)
+        spacing_area_out = None
 
     else:
-        return None
+
+        if not value or value <= 0:
+            return None
+
+        building_area_m2 = project_info.get("building_area")
+        spacing_area_out = None
+
+        if mode_key == "quantity":
+            quantity = value
+
+        elif mode_key == "grid_spacing":
+            if not building_area_m2 or building_area_m2 <= 0:
+                warnings.append(f"{spec['label']}: Building Area must be set to use Grid Spacing.")
+                return None
+            quantity = building_area_m2 / (value ** 2)
+            spacing_area_out = value ** 2
+
+        elif mode_key == "coverage_area":
+            if not building_area_m2 or building_area_m2 <= 0:
+                warnings.append(f"{spec['label']}: Building Area must be set to use Coverage Area.")
+                return None
+            quantity = building_area_m2 / value
+            spacing_area_out = value
+
+        else:
+            return None
+
+    if spec.get("frl_lookup"):
+        frl_result = _apply_frl_lookup(spec, quantity, product_type_name, frl_reference_df, frl_min, warnings)
+        if frl_result is None:
+            return None
+        carbon_quantity, frl_detail = frl_result
+        return _finalize_result(
+            spec, quantity, product_type_name, apparatus_output_df, warnings,
+            spacing_area=spacing_area_out, carbon_quantity=carbon_quantity, frl_min=frl_min, frl_detail=frl_detail,
+        )
 
     return _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=spacing_area_out)
 
 
-def calculate_component(spec, comp_state, apparatus_output_df, project_info=None, parent_quantity=None, results_so_far=None, warnings=None):
+def calculate_component(spec, comp_state, apparatus_output_df, project_info=None, parent_quantity=None, results_so_far=None, warnings=None,
+                         frl_reference_df=None):
     """
     Always returns a LIST of result dicts (possibly empty) - see
     module docstring. Callers should use results.extend(...).
@@ -915,6 +1010,7 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
             result = _calculate_input_row(
                 spec, row.get("Determination Type"), row.get("Value"), row.get("Product Type"),
                 apparatus_output_df, project_info, results_so_far, warnings,
+                frl_reference_df=frl_reference_df, frl_min=row.get("Required FRL (min)") if "Required FRL (min)" in table.columns else None,
             )
             if result:
                 results.append(result)
@@ -924,11 +1020,13 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
         spec, comp_state.get("determination_type"), comp_state.get("value"), comp_state.get("product_type"),
         apparatus_output_df, project_info, results_so_far, warnings,
         variable_values=comp_state.get("variable_values"),
+        frl_reference_df=frl_reference_df, frl_min=comp_state.get("frl_min"),
     )
     return [result] if result else []
 
 
-def calculate_component_group(specs, group_state, apparatus_output_df, project_info=None, results_so_far=None, warnings=None):
+def calculate_component_group(specs, group_state, apparatus_output_df, project_info=None, results_so_far=None, warnings=None,
+                               frl_reference_df=None):
     """
     Calculates every component in a group, IN SPEC ORDER, threading a
     growing results list so later components can reference earlier
@@ -956,6 +1054,7 @@ def calculate_component_group(specs, group_state, apparatus_output_df, project_i
             spec, comp_state, apparatus_output_df,
             project_info=project_info, parent_quantity=parent_qty,
             results_so_far=running_results, warnings=warnings,
+            frl_reference_df=frl_reference_df,
         )
 
         group_results.extend(new_results)

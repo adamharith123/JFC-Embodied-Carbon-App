@@ -38,6 +38,11 @@ Expected columns in the "ui_structure" sheet:
     Counted Apparatus     - comma-separated Labels to offer as
                             checkboxes (Cross-Category Counter only)
     Disclaimer           - optional warning text shown under the input
+    Requires FRL          - "Y" to show a separate FRL(min) selector
+                            next to Value/Product Type (Input archetype
+                            only) - see the frl_reference sheet and
+                            utils/proposed_design_calculations.py
+                            (get_frl_options/resolve_frl_multiplier)
 """
 
 import pandas as pd
@@ -136,11 +141,14 @@ def _row_to_spec(row):
         parent = row.get("Parent")
         parent = str(parent).strip() if not pd.isna(parent) and str(parent).strip() else None
 
+        frl_lookup = str(row.get("Requires FRL", "")).strip().upper() == "Y"
+
         return component_spec(
             key, str(row["Label"]).strip(), str(row["Apparatus"]).strip(), kind,
             disclaimer=disclaimer, modes=modes, multi_row=multi_row, units=units,
             parent_key=parent, formula_system=formula_system,
             formula_component=formula_component, formula_parameters=formula_parameters,
+            frl_lookup=frl_lookup, info=info,
         )
 
     if kind == KIND_LINKED_CHILD:
