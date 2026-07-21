@@ -453,8 +453,6 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     # -------- Input --------
 
-    # -------- Input --------
-
     formula_notes = None
 
     if not spec["multi_row"]:
@@ -523,9 +521,21 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
     else:
 
         if is_dts:
-            new_mode = MODE_LABELS["formula"]
-            col2, col3 = st.columns(2)
-            st.caption("DTS: value is calculated automatically from the AS Calc Sheet defaults.")
+            dts_mode_options = [m for m in mode_options if m != MODE_LABELS["quantity"]] or mode_options
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if comp_state.get("determination_type") in dts_mode_options:
+                    default_index = dts_mode_options.index(comp_state["determination_type"])
+                elif MODE_LABELS["formula"] in dts_mode_options:
+                    default_index = dts_mode_options.index(MODE_LABELS["formula"])
+                else:
+                    default_index = 0
+                new_mode = st.selectbox(
+                    "Determination Type", dts_mode_options,
+                    index=default_index,
+                    key=f"{key_prefix}_{spec['key']}_det",
+                )
+            st.caption("DTS: Total Quantity isn't offered here - every other method traces to an AS Calc Sheet default.")
         elif show_mode_dropdown:
             col1, col2, col3 = st.columns(3)
             with col1:

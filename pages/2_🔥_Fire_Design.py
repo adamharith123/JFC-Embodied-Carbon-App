@@ -194,10 +194,8 @@ def blank_subcategory_state(cat_num, sub_name):
         return init_group_state(GROUP_DEFINITIONS[(cat_num, sub_name)])
 
     if kind == "single_component":
-            spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
-            comp_state = init_component_state(spec)
-            comp_state["included"] = False
-            return {"expanded": False, "component": comp_state}
+        spec = SINGLE_COMPONENT_DEFINITIONS[(cat_num, sub_name)]
+        return {"expanded": False, "component": init_component_state(spec)}
 
     # "unavailable" (or any unrecognized kind) - minimal defensive fallback
     return {"status": "N/A", "expanded": False}
@@ -1442,4 +1440,3 @@ else:
                 st.plotly_chart(fig, use_container_width=True)
 
     render_footer()
-    
