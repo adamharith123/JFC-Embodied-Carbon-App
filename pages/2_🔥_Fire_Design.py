@@ -4,7 +4,7 @@ import copy
 import math
 import json
 
-from utils.constants import APP_SUBTITLE, APP_STATUS
+from utils.constants import APP_NAME,APP_SUBTITLE, APP_STATUS
 from utils.styles import apply_global_styles, render_header, render_footer
 from utils.project_store import (
     get_project_names,
@@ -87,7 +87,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-render_header("Fire Design", APP_SUBTITLE, APP_STATUS)
+render_header(APP_NAME, APP_SUBTITLE, APP_STATUS)
 
 # ==========================================================
 # Category / Subcategory Taxonomy

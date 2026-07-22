@@ -32,7 +32,7 @@ if not st.session_state.get("databases_loaded", False):
 render_header(
     title=APP_NAME,
     subtitle=APP_SUBTITLE,
-    status=f"{APP_VERSION} · {APP_STATUS}",
+    status=APP_STATUS,
 )
 
 
@@ -61,7 +61,7 @@ st.divider()
 
 st.markdown("## Assessment Methods")
 
-col1, col2, col3 = st.columns(3, gap="large")
+col1, col2 = st.columns(2, gap="large")
 
 with col1:
     st.markdown(
@@ -85,16 +85,6 @@ with col2:
         unsafe_allow_html=True,
     )
 
-with col3:
-    st.markdown(
-        """
-<div class="nav-card" style="text-align:center;">
-<h3>🏢</h3>
-<h4>Existing Building</h4>
-</div>
-""",
-        unsafe_allow_html=True,
-    )
 
 
 st.markdown("")

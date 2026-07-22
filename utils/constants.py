@@ -1,8 +1,8 @@
 from pathlib import Path
 
 APP_NAME = "Fire Safety Embodied Carbon App"
-APP_VERSION = "v6.0"
-APP_STATUS = "Internal Demonstration"
+APP_VERSION = ""
+APP_STATUS = "Release Candidate"
 APP_SUBTITLE = (
     "Developed by Jacaranda Flame Consulting<br>"
     "in collaboration with ARUP"
