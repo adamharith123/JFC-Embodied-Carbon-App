@@ -92,7 +92,7 @@ st.markdown("")
 if st.button(
     "🔥 Start Fire Design Assessment",
     type="primary",
-    use_container_width=True,
+    width='stretch',
 ):
     # Looked up by its "2_" prefix rather than hardcoded, so renaming
     # the file (e.g. to add/change its sidebar icon) can't silently

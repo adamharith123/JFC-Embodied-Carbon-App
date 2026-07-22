@@ -393,13 +393,13 @@ if st.session_state.test_step == 1:
                 st.markdown("**Design Composition**")
                 st.dataframe(
                     pd.DataFrame(design_rows),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
 
             edit_version_clicked = st.button(
                 "✏️ Edit Version",
-                use_container_width=True,
+                width='stretch',
             )
 
             if edit_version_clicked:
@@ -447,7 +447,7 @@ if st.session_state.test_step == 1:
 
         next_step = st.button(
             "Next: Configure Fire Safety Systems →",
-            use_container_width=True,
+            width='stretch',
         )
 
         if next_step:
@@ -701,7 +701,7 @@ else:
         col1, col2, col3 = st.columns(3)
 
         with col1:
-            if st.button("💾 Save", use_container_width=True):
+            if st.button("💾 Save", width='stretch'):
                 project_name = info.get("project_name")
                 if not project_name:
                     st.error("Please enter or select a project name before saving.")
@@ -712,14 +712,14 @@ else:
                     st.rerun()
 
         with col2:
-            if st.button("🗑️ Discard", use_container_width=True):
+            if st.button("🗑️ Discard", width='stretch'):
                 discard_changes()
                 st.session_state.test_show_unsaved_dialog = False
                 st.session_state.test_step = 1
                 st.rerun()
 
         with col3:
-            if st.button("Cancel", use_container_width=True):
+            if st.button("Cancel", width='stretch'):
                 st.session_state.test_show_unsaved_dialog = False
                 st.rerun()
 
@@ -785,7 +785,7 @@ else:
                 clicked = st.button(
                     label,
                     key=f"cat_nav_button_{i}",
-                    use_container_width=True,
+                    width='stretch',
                 )
 
             if clicked:
@@ -867,7 +867,7 @@ else:
 
                     st.dataframe(
                         empty_display_row(),
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                     )
 
@@ -881,7 +881,7 @@ else:
 
                     edited = st.data_editor(
                         sub_state["table"],
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                         num_rows="fixed",
                         column_config={
@@ -914,7 +914,7 @@ else:
 
                     edited = st.data_editor(
                         sub_state["table"],
-                        use_container_width=True,
+                        width='stretch',
                         hide_index=True,
                         num_rows="fixed",
                         column_config={
@@ -949,7 +949,7 @@ else:
 
     calculate = st.button(
         "Calculate Embodied Carbon",
-        use_container_width=True,
+        width='stretch',
     )
 
     if calculate:
@@ -965,7 +965,7 @@ else:
 
     save_version = st.button(
         save_label,
-        use_container_width=True,
+        width='stretch',
     )
 
     if save_version:
@@ -1006,7 +1006,7 @@ else:
 
         st.dataframe(
             st.session_state.test_results_df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -1019,11 +1019,11 @@ else:
         with left:
             fig = create_apparatus_pie_chart(st.session_state.test_results_df)
             if fig is not None:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
         with right:
             fig = create_lifecycle_bar_chart(st.session_state.test_summary)
             if fig is not None:
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width='stretch')
 
     render_footer()

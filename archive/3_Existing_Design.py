@@ -221,7 +221,7 @@ with right:
     st.write("")
     add_system = st.button(
         "Add",
-        use_container_width=True,
+        width='stretch',
     )
 
 # ==========================================================
@@ -279,7 +279,7 @@ with st.container(key=table_key):
 
     edited_df = st.data_editor(
         st.session_state.existing_design_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         num_rows="dynamic",
         disabled=not st.session_state.use_manual_table,
@@ -337,7 +337,7 @@ with st.container(key=csv_key):
         st.write("")
         preview_csv = st.button(
             "Preview CSV",
-            use_container_width=True,
+            width='stretch',
             disabled=not st.session_state.use_csv_upload,
         )
 
@@ -381,7 +381,7 @@ with st.container(key=csv_key):
     if st.session_state.show_csv_preview and not st.session_state.csv_upload_df.empty:
         st.dataframe(
             st.session_state.csv_upload_df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -455,7 +455,7 @@ st.divider()
 
 calculate = st.button(
     "Calculate Embodied Carbon",
-    use_container_width=True,
+    width='stretch',
 )
 
 if calculate:
@@ -469,7 +469,7 @@ st.divider()
 
 save_version = st.button(
     "💾 Save This Version",
-    use_container_width=True,
+    width='stretch',
 )
 
 if save_version:
@@ -537,7 +537,7 @@ if not st.session_state.existing_results_df.empty:
 
     st.dataframe(
         st.session_state.existing_results_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
     )
 
@@ -560,7 +560,7 @@ if not st.session_state.existing_results_df.empty:
         if fig is not None:
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width='stretch',
             )
 
     with right:
@@ -572,7 +572,7 @@ if not st.session_state.existing_results_df.empty:
         if fig is not None:
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width='stretch',
             )
 
 render_footer()

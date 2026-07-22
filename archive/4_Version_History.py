@@ -72,7 +72,7 @@ st.subheader("Design Composition")
 design_df = pd.DataFrame(selected_version["design"])
 results_df = pd.DataFrame(selected_version["results"])
 
-st.dataframe(design_df, use_container_width=True, hide_index=True)
+st.dataframe(design_df, width='stretch', hide_index=True)
 
 st.divider()
 
@@ -83,11 +83,11 @@ left, right = st.columns(2)
 with left:
     fig = create_apparatus_pie_chart(results_df)
     if fig is not None:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 with right:
     fig = create_lifecycle_bar_chart(summary)
     if fig is not None:
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 render_footer()

@@ -17,7 +17,7 @@ def render_generated_systems():
     if st.button(
         "Generate Proposed Design",
         type="primary",
-        use_container_width=True,
+        width='stretch',
     ):
 
         db = load_standards_database()
@@ -62,7 +62,7 @@ def render_generated_systems():
 
             st.dataframe(
                 df,
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
             results = st.session_state["sprinkler_results"]

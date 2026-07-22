@@ -153,14 +153,14 @@ fig_overall = create_overall_comparison_chart(
 )
 
 if fig_overall is not None:
-    st.plotly_chart(fig_overall, use_container_width=True)
+    st.plotly_chart(fig_overall, width='stretch')
 
 st.subheader("Comparison by Category")
 
 fig_category = create_category_comparison_chart(category_totals_df, label_a, label_b)
 
 if fig_category is not None:
-    st.plotly_chart(fig_category, use_container_width=True)
+    st.plotly_chart(fig_category, width='stretch')
 else:
     st.info("Neither version has any calculated results to compare yet.")
 
@@ -171,7 +171,7 @@ st.subheader("Category Breadown Table")
 
 st.dataframe(
     category_totals_df.sort_values("Category"),
-    use_container_width=True,
+    width='stretch',
     hide_index=True,
 )
 

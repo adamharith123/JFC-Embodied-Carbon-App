@@ -84,7 +84,7 @@ for v in versions:
 
         st.dataframe(
             design_df,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -103,7 +103,7 @@ for v in versions:
             save_notes = st.button(
                 "💾 Save Notes",
                 key=f"save_{selected_project}_{v['version']}",
-                use_container_width=True,
+                width='stretch',
             )
 
         with button_col2:
@@ -115,7 +115,7 @@ for v in versions:
             delete_this_version = st.button(
                 "🗑️ Delete Version",
                 key=f"delete_{selected_project}_{v['version']}",
-                use_container_width=True,
+                width='stretch',
                 disabled=not confirm_delete,
             )
 

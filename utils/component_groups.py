@@ -538,7 +538,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
         }
 
         edited = st.data_editor(
-            comp_state["table"], use_container_width=True, hide_index=True,
+            comp_state["table"], width='stretch', hide_index=True,
             num_rows="dynamic", column_config=column_config,
             key=f"{key_prefix}_{spec['key']}_table",
         )
