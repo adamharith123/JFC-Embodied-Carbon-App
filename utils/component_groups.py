@@ -57,6 +57,15 @@ STATUS_NA = "N/A"
 STATUS_DTS = "DTS"
 STATUS_PBD = "PBD"
 
+# Display-only labels for the status radio - comp_state["status"] and
+# every comparison/export always uses the STATUS_* constants above
+# verbatim; only what's drawn on screen changes here.
+STATUS_DISPLAY_LABELS = {
+    STATUS_NA: "N/A",
+    STATUS_DTS: "DTS",
+    STATUS_PBD: "Manual Override",
+}
+
 # ==========================================================
 # Archetype Constants
 # ==========================================================
@@ -492,6 +501,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
             new_status = st.radio(
                 spec["label"], status_options, index=status_options.index(current_status),
                 horizontal=True, key=f"{key_prefix}_{spec['key']}_status", label_visibility="collapsed",
+                format_func=lambda s: STATUS_DISPLAY_LABELS.get(s, s),
             )
 
         if new_status != comp_state.get("status"):

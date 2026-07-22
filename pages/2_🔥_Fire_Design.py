@@ -519,7 +519,7 @@ if st.session_state.test_step == 1:
         building_classes = get_building_classes()
 
         building_class = st.selectbox(
-            "Building Class (NCC)",
+            "Building Classification (NCC)",
             building_classes if building_classes else ["No building classes found"],
             key="test_building_class",
         )
