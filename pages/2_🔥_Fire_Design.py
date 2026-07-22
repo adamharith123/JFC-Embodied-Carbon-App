@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import copy
 import math
+import json
 
 from utils.constants import APP_SUBTITLE, APP_STATUS
 from utils.styles import apply_global_styles, render_header, render_footer
@@ -13,6 +14,8 @@ from utils.project_store import (
     finalize_version,
     update_existing_version,
     delete_version,
+    export_version,
+    import_version,
 )
 from utils.database_loader import (
     load_carbon_database,
@@ -325,6 +328,34 @@ if st.session_state.test_step == 1:
         key="test_project_mode",
     )
 
+    with st.expander("📥 Import Project / Version"):
+
+        st.caption(
+            "Import a version exported from this app (via **Export Version**, below). "
+            "It's added as a new version - it never overwrites anything already saved."
+        )
+
+        uploaded_export = st.file_uploader(
+            "Export file", type=["json"], key="test_import_uploader",
+        )
+
+        import_target_name = st.text_input(
+            "Import into project name (leave blank to use the file's original project name)",
+            key="test_import_target_name",
+        )
+
+        if st.button("Import", key="test_import_button", disabled=uploaded_export is None):
+            try:
+                payload = json.loads(uploaded_export.read().decode("utf-8"))
+                imported_project, imported_version = import_version(
+                    payload, target_project_name=import_target_name.strip() or None,
+                )
+                st.success(f"Imported as **{imported_project}**, version {imported_version}.")
+                st.rerun()
+            except (ValueError, json.JSONDecodeError) as e:
+                st.error(f"Couldn't import this file: {e}")
+
+
     show_next_button = True
     selected_existing_version = None
 
@@ -431,10 +462,23 @@ if st.session_state.test_step == 1:
                     hide_index=True,
                 )
 
-            edit_version_clicked = st.button(
-                "✏️ Edit Version",
-                use_container_width=True,
-            )
+            edit_col, export_col = st.columns(2)
+
+            with edit_col:
+                edit_version_clicked = st.button(
+                    "✏️ Edit Version",
+                    use_container_width=True,
+                )
+
+            with export_col:
+                export_payload = export_version(project_name, selected_existing_version["version"])
+                st.download_button(
+                    "⬇️ Export Version",
+                    data=json.dumps(export_payload, indent=2),
+                    file_name=f"{project_name}_v{selected_existing_version['version']}.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
 
             if edit_version_clicked:
 

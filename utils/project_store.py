@@ -434,3 +434,117 @@ def delete_project(project_name):
             (project_name,),
         )
         conn.commit()
+
+
+# ==========================================================
+# Export / Import
+# ==========================================================
+
+EXPORT_APP_TAG = "FireCarbonApp"
+EXPORT_FORMAT_VERSION = 1
+
+
+def export_version(project_name, version_number):
+    """
+    Bundles one saved version's inputs, outputs, and parent-project
+    metadata into a single self-contained dict - everything
+    import_version() needs to recreate it, elsewhere or later. Not
+    meant to be human-edited; only round-tripped through these two
+    functions. Returns None if the project/version doesn't exist.
+    """
+    meta = get_project_meta(project_name)
+    version = get_version_data(project_name, version_number)
+
+    if meta is None or version is None:
+        return None
+
+    return {
+        "app": EXPORT_APP_TAG,
+        "export_format": EXPORT_FORMAT_VERSION,
+        "project_name": project_name,
+        "project_area": meta["area"],
+        "project_notes": meta["notes"],
+        "version": version["version"],
+        "version_notes": version["version_notes"],
+        "timestamp": version["timestamp"],
+        "status": version["status"],
+        "design": version["design"],
+        "results": version["results"],
+        "summary": version["summary"],
+    }
+
+
+def import_version(payload, target_project_name=None):
+    """
+    Recreates a version from an export_version() payload as a NEW
+    version - reserves the next available version number under
+    target_project_name (or the payload's original project name if
+    not given), using the same reserve-then-write retry pattern as
+    reserve_next_version(), so an import can never overwrite or
+    collide with anything already saved.
+
+    Returns (project_name, version_number). Raises ValueError if the
+    payload doesn't look like a FireCarbonApp export.
+    """
+    if not isinstance(payload, dict) or payload.get("app") != EXPORT_APP_TAG:
+        raise ValueError("This file wasn't exported by this app - it can't be imported.")
+
+    project_name = (target_project_name or payload.get("project_name") or "").strip()
+    if not project_name:
+        raise ValueError("No project name given to import into.")
+
+    timestamp = datetime.now().isoformat(timespec="seconds")
+    imported_marker = f"\n[Imported {timestamp[:16].replace('T', ' ')}]"
+    imported_notes = (payload.get("version_notes") or "") + imported_marker
+
+    with _get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO projects (name, area, notes)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+                area = excluded.area,
+                notes = excluded.notes
+            """,
+            (project_name, payload.get("project_area"), payload.get("project_notes")),
+        )
+        conn.commit()
+
+    max_attempts = 10
+
+    for _ in range(max_attempts):
+
+        version_number = get_next_version_number(project_name)
+
+        try:
+            with _get_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO versions (
+                        project_name, version, version_notes, timestamp,
+                        design_json, results_json, summary_json, status
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'final')
+                    """,
+                    (
+                        project_name,
+                        version_number,
+                        imported_notes,
+                        timestamp,
+                        json.dumps(payload.get("design") or []),
+                        json.dumps(payload.get("results") or []),
+                        json.dumps(payload.get("summary") or {}),
+                    ),
+                )
+                conn.commit()
+            return project_name, version_number
+
+        except sqlite3.IntegrityError:
+            # Someone else claimed this version number in the
+            # meantime - try the next one instead.
+            continue
+
+    raise RuntimeError(
+        "Could not reserve a version number after multiple attempts. "
+        "Please try again."
+    )

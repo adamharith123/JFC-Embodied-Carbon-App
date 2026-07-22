@@ -477,8 +477,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     if not spec["multi_row"]:
 
-        dts_available = bool(spec.get("formula_system")) and "formula" in spec["modes"]
-        status_options = [STATUS_NA, STATUS_DTS, STATUS_PBD] if dts_available else [STATUS_NA, STATUS_PBD]
+        status_options = [STATUS_NA, STATUS_DTS, STATUS_PBD]
         current_status = comp_state.get("status", STATUS_NA)
         if current_status not in status_options:
             current_status = STATUS_NA
@@ -547,7 +546,11 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
         col_i = 0
 
         if is_dts:
-            dts_mode_options = [m for m in mode_options if m != MODE_LABELS["quantity"]] or mode_options
+            dts_mode_options = [
+                m for m in mode_options
+                if m != MODE_LABELS["quantity"]
+                and not (m == MODE_LABELS["formula"] and not spec.get("formula_system"))
+            ] or mode_options
             with cols[col_i]:
                 if comp_state.get("determination_type") in dts_mode_options:
                     default_index = dts_mode_options.index(comp_state["determination_type"])
