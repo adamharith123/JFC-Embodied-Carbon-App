@@ -13,6 +13,7 @@ ASSETS_DIR = ROOT_DIR / "assets"
 DATABASE_DIR = ROOT_DIR / "database" / "databases"
 TEMPLATE_DIR = ROOT_DIR / "database" / "templates"
 ARCHIVE_DIR = ROOT_DIR / "database" / "archive"
+DEFAULT_DATABASE_DIR = ROOT_DIR / "database" / "defaults"
 EXPORT_DIR = ROOT_DIR / "exports"
 REPORT_DIR = ROOT_DIR / "reports"
 
