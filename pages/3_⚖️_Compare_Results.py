@@ -8,7 +8,7 @@ from utils.charts import (
     create_category_comparison_chart,
     create_overall_comparison_chart,
 )
-
+from utils.report_generator import generate_comparison_report
 # ==========================================================
 # Page Configuration
 # ==========================================================
@@ -175,4 +175,29 @@ st.dataframe(
     hide_index=True,
 )
 
+st.subheader("Export Results")
+
+comparison_pdf_bytes = generate_comparison_report(
+    project_name=project_name,
+    label_a=label_a,
+    version_a=version_a,
+    label_b=label_b,
+    version_b=version_b,
+    category_totals_df=category_totals_df,
+    overall_figure=fig_overall,
+    category_figure=fig_category,
+)
+
+safe_project_name = "".join(
+    character if character.isalnum() or character in ("-", "_") else "_"
+    for character in project_name
+).strip("_") or "project"
+
+st.download_button(
+    "⬇️ Download Comparison PDF",
+    data=comparison_pdf_bytes,
+    file_name=f"{safe_project_name}_comparison_report.pdf",
+    mime="application/pdf",
+    width='stretch',
+)
 render_footer()

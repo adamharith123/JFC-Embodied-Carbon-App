@@ -51,7 +51,7 @@ from utils.component_groups import (
     KIND_CROSS_CATEGORY_COUNTER,
 )
 from utils.ui_structure_loader import load_ui_structure
-
+from utils.report_generator import generate_fire_design_report
 # ==========================================================
 # Page Configuration
 # ==========================================================
@@ -442,11 +442,15 @@ if st.session_state.test_step == 1:
             summary = selected_existing_version["summary"]
 
             if summary:
-                col1, col2, col3, col4 = st.columns(4)
-                col1.metric("A1-A3", f"{summary.get('A1-A3', 0):,.2f} kgCO₂e")
-                col2.metric("A4", f"{summary.get('A4', 0):,.2f} kgCO₂e")
-                col3.metric("A5", f"{summary.get('A5', 0):,.2f} kgCO₂e")
-                col4.metric("Total", f"{summary.get('Total', 0):,.2f} kgCO₂e")
+                col1, col2 = st.columns(2)
+
+                col1.metric("A1-A3", f"{summary['A1-A3']:,.2f} kgCO₂e")
+                col2.metric("A4", f"{summary['A4']:,.2f} kgCO₂e")
+
+                col3, col4 = st.columns(2)
+
+                col3.metric("A5", f"{summary['A5']:,.2f} kgCO₂e")
+                col4.metric("Total", f"{summary['Total']:,.2f} kgCO₂e")
 
             if selected_existing_version["version_notes"]:
                 st.markdown("**Version Notes**")
@@ -1465,12 +1469,16 @@ else:
 
         st.divider()
         st.subheader("Embodied Carbon Summary")
+        col1, col2 = st.columns(2)
 
-        col1, col2, col3, col4 = st.columns(4)
         col1.metric("A1-A3", f"{summary['A1-A3']:,.2f} kgCO₂e")
         col2.metric("A4", f"{summary['A4']:,.2f} kgCO₂e")
+
+        col3, col4 = st.columns(2)
+
         col3.metric("A5", f"{summary['A5']:,.2f} kgCO₂e")
         col4.metric("Total", f"{summary['Total']:,.2f} kgCO₂e")
+        
 
         st.divider()
         st.subheader("Calculation Results")
@@ -1489,4 +1497,32 @@ else:
             if fig is not None:
                 st.plotly_chart(fig, width='stretch')
 
+        st.divider()
+        st.subheader("Export Results")
+
+        apparatus_fig = create_apparatus_pie_chart(st.session_state.test_results_df)
+        lifecycle_fig = create_lifecycle_bar_chart(st.session_state.test_summary)
+
+        pdf_bytes = generate_fire_design_report(
+            project_name=info.get("project_name", "Unnamed Project"),
+            summary=st.session_state.test_summary,
+            results_df=st.session_state.test_results_df,
+            apparatus_figure=apparatus_fig,
+            lifecycle_figure=lifecycle_fig,
+        )
+
+        safe_project_name = "".join(
+            c if c.isalnum() or c in ("-", "_") else "_"
+            for c in info.get("project_name", "project")
+        ).strip("_") or "project"
+
+        st.download_button(
+            "⬇️ Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{safe_project_name}_fire_design_report.pdf",
+            mime="application/pdf",
+            width="stretch",
+        )
+
+    
     render_footer()

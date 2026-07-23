@@ -6,4 +6,5 @@ plotly
 xlsxwriter
 qrcode[pil]>=7.4
 pip-tools>=7.4
-
+reportlab>=4.0
+kaleido>=1.0
