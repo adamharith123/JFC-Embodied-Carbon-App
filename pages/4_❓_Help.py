@@ -56,7 +56,7 @@ st.markdown("## Calculation Methodology")
 
 st.markdown(
     """
-The Fire Safety Embodied Carbon App estimates the upfront embodied carbon (A1–A5)
+The Fire Embodied Carbon App estimates the upfront embodied carbon (A1–A5)
 associated with fire safety systems in buildings.
 
 The application integrates engineering databases, Australian Standards and
@@ -261,7 +261,7 @@ st.markdown(
 
 - NSW Embodied Carbon Databook
 
-- FireCarbonApp Engineering Databases
+- Fire Embodied Carbon App Engineering Databases
 """
 )
 

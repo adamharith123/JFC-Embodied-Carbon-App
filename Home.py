@@ -44,7 +44,7 @@ st.markdown("## Welcome")
 
 st.markdown(
     """
-The **Fire Safety Embodied Carbon App** estimates the upfront embodied carbon
+The **Fire Embodied Carbon App** estimates the upfront embodied carbon
 of fire safety systems in buildings.
 
 The application integrates engineering databases to automate fire safety

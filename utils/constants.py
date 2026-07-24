@@ -1,6 +1,6 @@
 from pathlib import Path
 
-APP_NAME = "Fire Safety Embodied Carbon App"
+APP_NAME = "Fire Embodied Carbon App (FECA)"
 APP_VERSION = ""
 APP_STATUS = "Release Candidate"
 APP_SUBTITLE = (

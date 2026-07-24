@@ -313,7 +313,7 @@ def render_footer():
     st.markdown(
         """
         <div class="footer">
-            Fire Safety Embodied Carbon App · JFC x ARUP · Release Candidate
+            Fire Embodied Carbon App · JFC x ARUP · Release Candidate
         </div>
         """,
         unsafe_allow_html=True,
