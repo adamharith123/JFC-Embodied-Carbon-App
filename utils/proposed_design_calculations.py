@@ -63,9 +63,9 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
     contributions.
 
     carbon_factors_row : a pandas Series with "A1-3", "A4", "A5",
-                          and "Total (A1-3 + A4 + A5)" columns -
-                          taken from either Apparatus Output or
-                          Product Output.
+                          and "Total (A1-3 + A4 + A5)" / "Total GWP (A1-3 + A4 + A5)"
+                          columns - taken from either Apparatus Output
+                          or Product Output.
     """
 
     def _factor(value):
@@ -84,7 +84,7 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
     carbon_a4 = _factor(_find_column(carbon_factors_row, "A4", "A4 (kg CO2e)")) * equivalent_quantity
     carbon_a5 = _factor(_find_column(carbon_factors_row, "A5", "A5 (kg CO2e)")) * equivalent_quantity
     carbon_total = _factor(_find_column(
-        carbon_factors_row, "Total (A1-3 + A4 + A5)", "Total"
+        carbon_factors_row, "Total (A1-3 + A4 + A5)", "Total GWP (A1-3 + A4 + A5)", "Total"
     )) * equivalent_quantity
 
     return {

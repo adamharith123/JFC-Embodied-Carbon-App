@@ -71,7 +71,7 @@ DATABASE_REGISTRY = {
                 [
                     "Category", "System", "Apparatus", "Units",
                     "A1-3 (kg CO2e)", "A4 (kg CO2e)", "A5 (kg CO2e)",
-                    "Total (A1-3 + A4 + A5)",
+                    ("Total (A1-3 + A4 + A5)", "Total GWP (A1-3 + A4 + A5)"),
                 ],
             ),
         },
@@ -185,7 +185,16 @@ def validate_workbook(file_obj, db_key):
             file_obj.seek(0)
 
         available_cols = {_norm(c) for c in df.columns}
-        missing_cols = [c for c in required_columns if _norm(c) not in available_cols]
+        missing_cols = []
+        for required in required_columns:
+            # A required entry can be a single column name, or a
+            # tuple/list of acceptable alternative names (any one
+            # present satisfies the requirement) - mirrors the
+            # tolerance utils/proposed_design_calculations.py's
+            # _find_column() already has for renamed columns.
+            alternatives = required if isinstance(required, (tuple, list)) else (required,)
+            if not any(_norm(alt) in available_cols for alt in alternatives):
+                missing_cols.append(" / ".join(alternatives))
 
         if missing_cols:
             return False, (
