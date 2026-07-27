@@ -361,22 +361,11 @@ if st.session_state.test_step == 1:
 
     if project_mode == "New Project":
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            project_name = st.text_input(
-                "Project Name",
-                placeholder="Example: ABC Office Fitout",
-                key="test_project_name_new",
-            )
-
-        with col2:
-            building_area = st.number_input(
-                "Building Area (m²)",
-                min_value=0.0,
-                step=1.0,
-                key="test_building_area_new",
-            )
+        project_name = st.text_input(
+            "Project Name",
+            placeholder="Example: ABC Office Fitout",
+            key="test_project_name_new",
+        )
 
         assessment_notes = st.text_area(
             "Assessment Notes",
@@ -392,25 +381,20 @@ if st.session_state.test_step == 1:
             st.info("No existing projects found yet. Create a New Project first.")
             st.stop()
 
-        col1, col2 = st.columns(2)
-
-        with col1:
-            project_name = st.selectbox(
-                "Select Project",
-                existing_projects,
-                key="test_project_name_existing",
-            )
+        project_name = st.selectbox(
+            "Select Project",
+            existing_projects,
+            key="test_project_name_existing",
+        )
 
         project_meta = get_project_meta(project_name)
 
-        with col2:
-            building_area = st.number_input(
-                "Building Area (m²)",
-                min_value=0.0,
-                step=1.0,
-                value=float(project_meta["area"]) if project_meta and project_meta["area"] else 0.0,
-                key="test_building_area_existing",
-            )
+        # Building Area is no longer a direct input - it's derived from
+        # Floor Area per Storey x Number of Storeys further down. This
+        # fallback is only used to seed session state when re-opening a
+        # locked version for editing (see "Edit Version" below), before
+        # the user re-enters storey figures.
+        existing_project_area = float(project_meta["area"]) if project_meta and project_meta["area"] else 0.0
 
         assessment_notes = st.text_area(
             "Assessment Notes",
@@ -491,7 +475,7 @@ if st.session_state.test_step == 1:
                 st.session_state.test_project_info = {
                     "project_mode": project_mode,
                     "project_name": project_name,
-                    "building_area": building_area,
+                    "building_area": existing_project_area,
                     "assessment_notes": assessment_notes,
                     "building_class": building_classes[0] if building_classes else "",
                     "version_notes": selected_existing_version["version_notes"] or "",
@@ -499,7 +483,8 @@ if st.session_state.test_step == 1:
                     "building_storeys": None,
                     "building_effective_height": None,
                     "building_floor_to_floor_height": None,
-                    "building_risers": None,
+                    "building_fire_stairs": None,
+                    "building_rooms": None,
                     "building_exits_per_storey": None,
                     "sprinkler_hazard_classification": None,
                 }
@@ -540,7 +525,6 @@ if st.session_state.test_step == 1:
                     "Floor Area per Storey (m²)",
                     min_value=0.0,
                     step=1.0,
-                    value=float(building_area) if building_area else 0.0,
                     key="test_floor_area_per_storey",
                 )
 
@@ -560,7 +544,9 @@ if st.session_state.test_step == 1:
                     key="test_building_effective_height",
                 )
 
-            row2_col1, row2_col2, row2_col3, row2_col4 = st.columns(4)
+            building_area = floor_area_per_storey * building_storeys
+
+            row2_col1, row2_col2, row2_col3 = st.columns(3)
 
             with row2_col1:
                 building_floor_to_floor_height = st.number_input(
@@ -571,14 +557,24 @@ if st.session_state.test_step == 1:
                 )
 
             with row2_col2:
-                building_risers = st.number_input(
-                    "Number of Risers",
+                building_fire_stairs = st.number_input(
+                    "Number of Fire Stairs",
                     min_value=0,
                     step=1,
-                    key="test_building_risers",
+                    key="test_building_fire_stairs",
                 )
 
             with row2_col3:
+                building_rooms = st.number_input(
+                    "Number of Rooms",
+                    min_value=0,
+                    step=1,
+                    key="test_building_rooms",
+                )
+
+            row3_col1, row3_col2 = st.columns(2)
+
+            with row3_col1:
                 building_exits_per_storey = st.number_input(
                     "Number of Exits per Storey",
                     min_value=0,
@@ -586,7 +582,7 @@ if st.session_state.test_step == 1:
                     key="test_building_exits_per_storey",
                 )
 
-            with row2_col4:
+            with row3_col2:
                 sprinkler_hazard_classification = st.selectbox(
                     "Sprinkler Hazard Classification",
                     [
@@ -631,7 +627,8 @@ if st.session_state.test_step == 1:
                     "building_storeys": building_storeys,
                     "building_effective_height": building_effective_height,
                     "building_floor_to_floor_height": building_floor_to_floor_height,
-                    "building_risers": building_risers,
+                    "building_fire_stairs": building_fire_stairs,
+                    "building_rooms": building_rooms,
                     "building_exits_per_storey": building_exits_per_storey,
                     "sprinkler_hazard_classification": sprinkler_hazard_classification,
                 }
