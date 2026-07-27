@@ -45,7 +45,8 @@ def _find_column(row, *candidates):
     """
     Returns the value of the first column name in `candidates` that
     actually exists on `row`. The database's carbon-factor column
-    names have changed before (e.g. "A1-3" -> "A1-3 (kg CO2e)") -
+    names have changed before (e.g. "A1-3" -> "A1-3 (kg CO2e)" ->
+    "A1-3 (kgCO2e)") -
     this keeps the calculation working across either naming instead
     of hard-failing with a KeyError the next time a column gets
     renamed.
@@ -80,9 +81,9 @@ def calculate_component_carbon(equivalent_quantity, carbon_factors_row):
         except (TypeError, ValueError):
             return 0.0
 
-    carbon_a1_3 = _factor(_find_column(carbon_factors_row, "A1-3", "A1-3 (kg CO2e)")) * equivalent_quantity
-    carbon_a4 = _factor(_find_column(carbon_factors_row, "A4", "A4 (kg CO2e)")) * equivalent_quantity
-    carbon_a5 = _factor(_find_column(carbon_factors_row, "A5", "A5 (kg CO2e)")) * equivalent_quantity
+    carbon_a1_3 = _factor(_find_column(carbon_factors_row, "A1-3", "A1-3 (kg CO2e)", "A1-3 (kgCO2e)")) * equivalent_quantity
+    carbon_a4 = _factor(_find_column(carbon_factors_row, "A4", "A4 (kg CO2e)", "A4 (kgCO2e)")) * equivalent_quantity
+    carbon_a5 = _factor(_find_column(carbon_factors_row, "A5", "A5 (kg CO2e)", "A5 (kgCO2e)")) * equivalent_quantity
     carbon_total = _factor(_find_column(
         carbon_factors_row, "Total (A1-3 + A4 + A5)", "Total GWP (A1-3 + A4 + A5)", "Total"
     )) * equivalent_quantity

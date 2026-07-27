@@ -44,11 +44,11 @@ Expected columns in the "ui_structure" sheet:
                             only; defaults to "Choice")
     Counted Apparatus     - comma-separated Apparatus names to offer
                             as checkboxes (Cross-Category Counter only)
-    Disclaimer / Info    - free text shown both as an always-visible
-                            warning caption and inside the collapsed
-                            "About this calculation" panel - the sheet
-                            no longer distinguishes the two, so the
-                            same text is used for both.
+    Disclaimer            - free text shown as an always-visible
+                            warning caption (⚠️) above the component.
+    Info                  - free text (may include standard/EPD
+                            references) shown inside the collapsed
+                            "About this calculation" panel.
     Requires FRL          - "Y" to show a separate FRL(min) selector
                             next to Value/Product Type (Input archetype
                             only) - see the frl_reference sheet and
@@ -134,14 +134,15 @@ def _row_to_spec(row):
 
     key = str(row["Apparatus"]).strip().lower().replace(" ", "_")
 
-    # The sheet merges what used to be two separate columns
-    # ("Disclaimer" and "Info") into one ("Disclaimer / Info").
-    # Same text now drives both the always-visible warning caption
-    # and the collapsed "About this calculation" panel.
-    disclaimer_info = row.get("Disclaimer / Info")
-    disclaimer_info = None if pd.isna(disclaimer_info) or not str(disclaimer_info).strip() else str(disclaimer_info).strip()
-    disclaimer = disclaimer_info
-    info = disclaimer_info
+    # "Disclaimer" and "Info" are separate columns in the sheet -
+    # Disclaimer drives the always-visible warning caption, Info
+    # drives the collapsed "About this calculation" panel (this is
+    # also where reference citations now live).
+    def _clean(value):
+        return None if pd.isna(value) or not str(value).strip() else str(value).strip()
+
+    disclaimer = _clean(row.get("Disclaimer"))
+    info = _clean(row.get("Info"))
 
     if kind == KIND_INPUT:
 
@@ -252,12 +253,12 @@ def load_ui_structure():
         # crash the whole page.
         if archetype_raw == UNAVAILABLE_ARCHETYPE or archetype_raw in ("", "nan"):
             apparatus_label = str(row["Apparatus"]).strip()
-            disclaimer_info = row.get("Disclaimer / Info")
-            disclaimer_info = (
-                None
-                if pd.isna(disclaimer_info) or not str(disclaimer_info).strip()
-                else str(disclaimer_info).strip()
-            )
+
+            def _clean(value):
+                return None if pd.isna(value) or not str(value).strip() else str(value).strip()
+
+            disclaimer_text = _clean(row.get("Disclaimer"))
+            info_text = _clean(row.get("Info"))
 
             # Keep unavailable apparatus inside their declared System group.
             # Previously this branch ignored System and registered each row as
@@ -273,8 +274,8 @@ def load_ui_structure():
                 group_definitions[(cat_num, group_name)].append(
                     component_spec(
                         key, apparatus_label, None, KIND_UNAVAILABLE,
-                        disclaimer=disclaimer_info or "This is not available.",
-                        info=disclaimer_info,
+                        disclaimer=disclaimer_text or "This is not available.",
+                        info=info_text,
                     )
                 )
             else:

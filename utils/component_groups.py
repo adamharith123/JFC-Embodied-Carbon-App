@@ -728,7 +728,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 def _render_info_panel(spec, formula_notes=None):
     """
     Collapsed-by-default panel showing the plain-English explanation
-    from ui_structure's "Disclaimer / Info" column, plus - for Formula-mode
+    from ui_structure's "Info" column, plus - for Formula-mode
     components - the calc_rules "notes" behind each parameter it
     pulls. Both are spreadsheet-maintained; nothing here is hardcoded
     per apparatus.

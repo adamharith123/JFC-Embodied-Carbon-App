@@ -70,7 +70,9 @@ DATABASE_REGISTRY = {
                 1,
                 [
                     "Category", "System", "Apparatus", "Units",
-                    "A1-3 (kg CO2e)", "A4 (kg CO2e)", "A5 (kg CO2e)",
+                    ("A1-3 (kg CO2e)", "A1-3 (kgCO2e)"),
+                    ("A4 (kg CO2e)", "A4 (kgCO2e)"),
+                    ("A5 (kg CO2e)", "A5 (kgCO2e)"),
                     ("Total (A1-3 + A4 + A5)", "Total GWP (A1-3 + A4 + A5)"),
                 ],
             ),

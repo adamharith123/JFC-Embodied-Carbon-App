@@ -62,9 +62,9 @@ def calculate_existing_design(existing_design_df, apparatus_output_df):
 
         match = match.iloc[0]
 
-        a13 = float(_find_column(match, "A1-3", "A1-3 (kg CO2e)") or 0) * quantity
-        a4 = float(_find_column(match, "A4", "A4 (kg CO2e)") or 0) * quantity
-        a5 = float(_find_column(match, "A5", "A5 (kg CO2e)") or 0) * quantity
+        a13 = float(_find_column(match, "A1-3", "A1-3 (kg CO2e)", "A1-3 (kgCO2e)") or 0) * quantity
+        a4 = float(_find_column(match, "A4", "A4 (kg CO2e)", "A4 (kgCO2e)") or 0) * quantity
+        a5 = float(_find_column(match, "A5", "A5 (kg CO2e)", "A5 (kgCO2e)") or 0) * quantity
         total = float(_find_column(match, "Total (A1-3 + A4 + A5)", "Total") or 0) * quantity
 
         results.append(
