@@ -58,6 +58,18 @@ def _ensure_db():
             conn.execute("ALTER TABLE versions ADD COLUMN status TEXT DEFAULT 'final'")
             conn.commit()
 
+        # Migration: older databases created before building_inputs_json
+        # existed get it added automatically, defaulting to NULL (read
+        # back as an empty dict by get_project_versions()). This column
+        # holds the "Additional Building Inputs" (floor area per storey,
+        # storeys, effective height, etc.) and Building Classification
+        # entered on the Fire Design page, so a version can be reopened
+        # with those fields pre-filled instead of blank.
+        cols = [row[1] for row in conn.execute("PRAGMA table_info(versions)").fetchall()]
+        if "building_inputs_json" not in cols:
+            conn.execute("ALTER TABLE versions ADD COLUMN building_inputs_json TEXT")
+            conn.commit()
+
         # Enforce one version number per project. Wrapped in try/except
         # because if duplicate (project_name, version) rows already
         # exist from before this fix, creating the index will fail -
@@ -129,7 +141,8 @@ def get_project_versions(project_name):
         rows = conn.execute(
             """
             SELECT version, version_notes, timestamp,
-                   design_json, results_json, summary_json, status
+                   design_json, results_json, summary_json, status,
+                   building_inputs_json
             FROM versions
             WHERE project_name = ?
             ORDER BY version DESC
@@ -148,6 +161,7 @@ def get_project_versions(project_name):
                 "results": json.loads(r[4]) if r[4] else [],
                 "summary": json.loads(r[5]) if r[5] else {},
                 "status": r[6] if r[6] else "final",
+                "building_inputs": json.loads(r[7]) if r[7] else {},
             }
         )
     return versions
@@ -216,13 +230,18 @@ def save_project_version(
 # Reservation-Based Save (used by TestUI)
 # ==========================================================
 
-def reserve_next_version(project_name, area, notes):
+def reserve_next_version(project_name, area, notes, building_inputs=None):
     """
     Atomically reserves the next version number for a project by
     immediately inserting an empty 'draft' row. If two people attempt
     this at the same moment, the UNIQUE(project_name, version) index
     guarantees only one succeeds per number - the other retries with
     the next number automatically.
+
+    building_inputs (optional dict) is the "Additional Building
+    Inputs" + Building Classification collected on the Fire Design
+    page - stored so the version can later be reopened with those
+    fields pre-filled instead of blank.
     """
 
     with _get_connection() as conn:
@@ -251,9 +270,10 @@ def reserve_next_version(project_name, area, notes):
                     """
                     INSERT INTO versions (
                         project_name, version, version_notes, timestamp,
-                        design_json, results_json, summary_json, status
+                        design_json, results_json, summary_json, status,
+                        building_inputs_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)
                     """,
                     (
                         project_name,
@@ -263,6 +283,7 @@ def reserve_next_version(project_name, area, notes):
                         "[]",
                         "[]",
                         "{}",
+                        json.dumps(building_inputs or {}),
                     ),
                 )
                 conn.commit()
@@ -288,10 +309,16 @@ def finalize_version(
     design_df,
     results_df,
     summary,
+    building_inputs=None,
 ):
     """
     Fills in a previously-reserved draft version with real data and
     marks it as final.
+
+    building_inputs (optional dict) is the "Additional Building
+    Inputs" + Building Classification collected on the Fire Design
+    page - stored so the version can later be reopened with those
+    fields pre-filled instead of blank.
     """
 
     with _get_connection() as conn:
@@ -314,7 +341,8 @@ def finalize_version(
                 design_json = ?,
                 results_json = ?,
                 summary_json = ?,
-                status = 'final'
+                status = 'final',
+                building_inputs_json = ?
             WHERE project_name = ? AND version = ?
             """,
             (
@@ -323,6 +351,7 @@ def finalize_version(
                 design_df.to_json(orient="records"),
                 results_df.to_json(orient="records"),
                 json.dumps(summary),
+                json.dumps(building_inputs or {}),
                 project_name,
                 version_number,
             ),
@@ -339,12 +368,18 @@ def update_existing_version(
     design_df,
     results_df,
     summary,
+    building_inputs=None,
 ):
     """
     Overwrites an already-final version's data - used when a saved
     version is explicitly reopened and edited. Appends a timestamped
     edit marker to the version notes so the edit history stays
     visible, rather than silently overwriting what was there before.
+
+    building_inputs (optional dict) is the "Additional Building
+    Inputs" + Building Classification collected on the Fire Design
+    page - stored so the version can later be reopened with those
+    fields pre-filled instead of blank.
     """
 
     edit_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -371,7 +406,8 @@ def update_existing_version(
                 design_json = ?,
                 results_json = ?,
                 summary_json = ?,
-                status = 'final'
+                status = 'final',
+                building_inputs_json = ?
             WHERE project_name = ? AND version = ?
             """,
             (
@@ -380,6 +416,7 @@ def update_existing_version(
                 design_df.to_json(orient="records"),
                 results_df.to_json(orient="records"),
                 json.dumps(summary),
+                json.dumps(building_inputs or {}),
                 project_name,
                 version_number,
             ),
@@ -471,6 +508,7 @@ def export_version(project_name, version_number):
         "design": version["design"],
         "results": version["results"],
         "summary": version["summary"],
+        "building_inputs": version["building_inputs"],
     }
 
 
@@ -522,9 +560,10 @@ def import_version(payload, target_project_name=None):
                     """
                     INSERT INTO versions (
                         project_name, version, version_notes, timestamp,
-                        design_json, results_json, summary_json, status
+                        design_json, results_json, summary_json, status,
+                        building_inputs_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'final')
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'final', ?)
                     """,
                     (
                         project_name,
@@ -534,6 +573,7 @@ def import_version(payload, target_project_name=None):
                         json.dumps(payload.get("design") or []),
                         json.dumps(payload.get("results") or []),
                         json.dumps(payload.get("summary") or {}),
+                        json.dumps(payload.get("building_inputs") or {}),
                     ),
                 )
                 conn.commit()

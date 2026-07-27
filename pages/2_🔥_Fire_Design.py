@@ -261,6 +261,55 @@ def version_summary_label(v):
     return f"Version {v['version']} — {note_preview}{status_tag}"
 
 
+# Maps the keys used in a version's saved "building_inputs" dict to the
+# Streamlit widget keys of the "Additional Building Inputs" fields, so
+# a saved version's figures can be used to pre-fill those widgets.
+BUILDING_INPUT_WIDGET_KEYS = {
+    "floor_area_per_storey": "test_floor_area_per_storey",
+    "building_storeys": "test_building_storeys",
+    "building_effective_height": "test_building_effective_height",
+    "building_floor_to_floor_height": "test_building_ftf_height",
+    "building_fire_stairs": "test_building_fire_stairs",
+    "building_rooms": "test_building_rooms",
+    "building_exits_per_storey": "test_building_exits_per_storey",
+    "sprinkler_hazard_classification": "test_sprinkler_hazard_classification",
+}
+
+
+def prefill_building_input_widgets(saved_inputs, building_classes):
+    """
+    Sets the Additional Building Inputs widget session-state keys from
+    a previously saved building_inputs dict, so the widgets render
+    with those values already filled in. A key is only set when a
+    saved value actually exists - an unset key just lets the widget
+    fall back to its own default, which matters for versions saved
+    before building_inputs was tracked.
+    """
+
+    for info_key, widget_key in BUILDING_INPUT_WIDGET_KEYS.items():
+        if saved_inputs.get(info_key) is not None:
+            st.session_state[widget_key] = saved_inputs[info_key]
+
+    saved_building_class = saved_inputs.get("building_class")
+
+    if saved_building_class and saved_building_class in building_classes:
+        st.session_state["test_building_class"] = saved_building_class
+
+
+def extract_building_inputs(info):
+    """
+    Pulls the "Additional Building Inputs" + Building Classification
+    fields out of a test_project_info dict, for saving alongside a
+    version (see project_store.reserve_next_version / finalize_version
+    / update_existing_version). Excludes project-level fields
+    (project_name, assessment_notes, etc.) that are already stored
+    elsewhere.
+    """
+
+    keys = list(BUILDING_INPUT_WIDGET_KEYS.keys()) + ["building_class"]
+    return {key: info.get(key) for key in keys}
+
+
 # ==========================================================
 # Session State
 # ==========================================================
@@ -412,6 +461,22 @@ if st.session_state.test_step == 1:
             key="test_version_choice",
         )
 
+        if selected_version_label == "+ New Version" and versions:
+
+            # Starting a fresh version - pre-fill the Additional
+            # Building Inputs from the most recent saved version as a
+            # starting point, so the user isn't re-typing the same
+            # storey figures every version. Guarded by a marker so
+            # this only runs once per project selection - otherwise
+            # it would overwrite the user's own edits on every rerun
+            # (e.g. typing in Assessment Notes) while this project
+            # stays selected.
+            prefill_marker_key = "test_new_version_prefill_project"
+
+            if st.session_state.get(prefill_marker_key) != project_name:
+                prefill_building_input_widgets(versions[0].get("building_inputs") or {}, get_building_classes())
+                st.session_state[prefill_marker_key] = project_name
+
         if selected_version_label != "+ New Version":
 
             selected_index = version_options.index(selected_version_label) - 1
@@ -472,21 +537,39 @@ if st.session_state.test_step == 1:
 
                 building_classes = get_building_classes()
 
+                saved_inputs = selected_existing_version.get("building_inputs") or {}
+
+                # Pre-fill the Additional Building Inputs widgets with
+                # what was saved for this version, so "Back to Project
+                # Information" shows real figures instead of blanks.
+                prefill_building_input_widgets(saved_inputs, building_classes)
+
+                saved_building_class = saved_inputs.get("building_class")
+                building_class_valid = saved_building_class and saved_building_class in building_classes
+
+                saved_floor_area = saved_inputs.get("floor_area_per_storey")
+                saved_storeys = saved_inputs.get("building_storeys")
+
+                if saved_floor_area is not None and saved_storeys is not None:
+                    building_area_for_edit = saved_floor_area * saved_storeys
+                else:
+                    building_area_for_edit = existing_project_area
+
                 st.session_state.test_project_info = {
                     "project_mode": project_mode,
                     "project_name": project_name,
-                    "building_area": existing_project_area,
+                    "building_area": building_area_for_edit,
                     "assessment_notes": assessment_notes,
-                    "building_class": building_classes[0] if building_classes else "",
+                    "building_class": saved_building_class if building_class_valid else (building_classes[0] if building_classes else ""),
                     "version_notes": selected_existing_version["version_notes"] or "",
-                    "floor_area_per_storey": None,
-                    "building_storeys": None,
-                    "building_effective_height": None,
-                    "building_floor_to_floor_height": None,
-                    "building_fire_stairs": None,
-                    "building_rooms": None,
-                    "building_exits_per_storey": None,
-                    "sprinkler_hazard_classification": None,
+                    "floor_area_per_storey": saved_floor_area,
+                    "building_storeys": saved_storeys,
+                    "building_effective_height": saved_inputs.get("building_effective_height"),
+                    "building_floor_to_floor_height": saved_inputs.get("building_floor_to_floor_height"),
+                    "building_fire_stairs": saved_inputs.get("building_fire_stairs"),
+                    "building_rooms": saved_inputs.get("building_rooms"),
+                    "building_exits_per_storey": saved_inputs.get("building_exits_per_storey"),
+                    "sprinkler_hazard_classification": saved_inputs.get("sprinkler_hazard_classification"),
                 }
 
                 st.session_state.test_categories = load_categories_from_design_rows(design_rows)
@@ -614,9 +697,7 @@ if st.session_state.test_step == 1:
             if not project_name:
                 st.error("Please enter or select a project name before continuing.")
             else:
-                reserved_version = reserve_next_version(project_name, building_area, assessment_notes)
-
-                st.session_state.test_project_info = {
+                new_project_info = {
                     "project_mode": project_mode,
                     "project_name": project_name,
                     "building_area": building_area,
@@ -632,6 +713,13 @@ if st.session_state.test_step == 1:
                     "building_exits_per_storey": building_exits_per_storey,
                     "sprinkler_hazard_classification": sprinkler_hazard_classification,
                 }
+
+                reserved_version = reserve_next_version(
+                    project_name, building_area, assessment_notes,
+                    building_inputs=extract_building_inputs(new_project_info),
+                )
+
+                st.session_state.test_project_info = new_project_info
 
                 st.session_state.test_categories = fresh_categories()
                 st.session_state.test_results_df = pd.DataFrame()
@@ -943,6 +1031,7 @@ else:
                 design_df=build_design_dataframe(),
                 results_df=st.session_state.test_results_df,
                 summary=st.session_state.test_summary,
+                building_inputs=extract_building_inputs(info),
             )
         else:
             finalize_version(
@@ -952,6 +1041,7 @@ else:
                 design_df=build_design_dataframe(),
                 results_df=st.session_state.test_results_df,
                 summary=st.session_state.test_summary,
+                building_inputs=extract_building_inputs(info),
             )
             st.session_state.test_is_new_unsaved_draft = False
 
