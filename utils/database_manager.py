@@ -96,7 +96,8 @@ DATABASE_REGISTRY = {
             "ui_structure": (
                 0,
                 [
-                    "Category", "Category Name", "Group", "Label", "Apparatus",
+                    "Category", "Category Name", "System", "Apparatus",
+                    "ID_Linked_to_EC_Database",
                     "Archetype", "Modes", "Allow Multiple Rows", "Units",
                     "Parent", "Linked Mode", "Formula System",
                     "Formula Component", "Formula Parameters",

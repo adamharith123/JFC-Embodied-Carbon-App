@@ -18,31 +18,48 @@ Expected columns in the "ui_structure" sheet:
     Category Name       - display name for the category (only needs
                            to be filled once per category; repeated
                            rows are ignored after the first)
-    Group               - if this apparatus is nested under an
+    System               - if this apparatus is nested under an
                            expandable group (e.g. "Wall Assemblies"),
                            the group's display name. Leave blank for
                            a standalone entry.
-    Label               - display name for this component
-    Apparatus            - exact name in the Carbon Database's
+    Apparatus            - display name for this component
+    ID_Linked_to_EC_Database
+                          - exact name in the Carbon Database's
                             Apparatus Output sheet
     Archetype           - "Input", "Linked Child", or
-                           "Cross-Category Counter"
+                           "Cross-Category Counter". Blank/unset is
+                           treated the same as "Unavailable" (the row
+                           is registered as a subcategory with no
+                           working component behind it yet) rather
+                           than raising an error, since declared-but-
+                           not-yet-configured rows are expected while
+                           the taxonomy is being built out.
     Include Spacing      - Y/N (Input archetype only)
     Units                - comma-separated, e.g. "m2" or "kg,L"
                             (Input archetype only, ignored if Include
                             Spacing is Y)
-    Parent               - the Label this mirrors (Linked Child), or
-                            blank
+    Parent               - the Apparatus name this mirrors (Linked
+                            Child), or blank
     Linked Mode          - "Choice" or "Override Only" (Linked Child
                             only; defaults to "Choice")
-    Counted Apparatus     - comma-separated Labels to offer as
-                            checkboxes (Cross-Category Counter only)
-    Disclaimer           - optional warning text shown under the input
+    Counted Apparatus     - comma-separated Apparatus names to offer
+                            as checkboxes (Cross-Category Counter only)
+    Disclaimer / Info    - free text shown both as an always-visible
+                            warning caption and inside the collapsed
+                            "About this calculation" panel - the sheet
+                            no longer distinguishes the two, so the
+                            same text is used for both.
     Requires FRL          - "Y" to show a separate FRL(min) selector
                             next to Value/Product Type (Input archetype
                             only) - see the frl_reference sheet and
                             utils/proposed_design_calculations.py
                             (get_frl_options/resolve_frl_multiplier)
+
+Note: the sheet also has a "Product Type" column (a comma-separated
+list of expected product names per apparatus) which is not currently
+read anywhere in this loader - it's informational/reference only
+until a decision is made on whether the app should use it to filter
+the Product Type dropdown.
 """
 
 import pandas as pd
@@ -55,6 +72,7 @@ from utils.component_groups import (
     KIND_INPUT,
     KIND_LINKED_CHILD,
     KIND_CROSS_CATEGORY_COUNTER,
+    KIND_UNAVAILABLE,
 )
 
 ARCHETYPE_MAP = {
@@ -110,17 +128,20 @@ def _row_to_spec(row):
 
     if kind is None:
         raise ValueError(
-            f"Unrecognized Archetype '{row.get('Archetype')}' for '{row.get('Label')}'. "
+            f"Unrecognized Archetype '{row.get('Archetype')}' for '{row.get('Apparatus')}'. "
             f"Must be one of: Input, Linked Child, Cross-Category Counter."
         )
 
-    key = str(row["Label"]).strip().lower().replace(" ", "_")
+    key = str(row["Apparatus"]).strip().lower().replace(" ", "_")
 
-    disclaimer = row.get("Disclaimer")
-    disclaimer = None if pd.isna(disclaimer) or not str(disclaimer).strip() else str(disclaimer).strip()
-
-    info = row.get("Info")
-    info = None if pd.isna(info) or not str(info).strip() else str(info).strip()
+    # The sheet merges what used to be two separate columns
+    # ("Disclaimer" and "Info") into one ("Disclaimer / Info").
+    # Same text now drives both the always-visible warning caption
+    # and the collapsed "About this calculation" panel.
+    disclaimer_info = row.get("Disclaimer / Info")
+    disclaimer_info = None if pd.isna(disclaimer_info) or not str(disclaimer_info).strip() else str(disclaimer_info).strip()
+    disclaimer = disclaimer_info
+    info = disclaimer_info
 
     if kind == KIND_INPUT:
 
@@ -144,7 +165,7 @@ def _row_to_spec(row):
         frl_lookup = str(row.get("Requires FRL", "")).strip().upper() == "Y"
 
         return component_spec(
-            key, str(row["Label"]).strip(), str(row["Apparatus"]).strip(), kind,
+            key, str(row["Apparatus"]).strip(), str(row["ID_Linked_to_EC_Database"]).strip(), kind,
             disclaimer=disclaimer, modes=modes, multi_row=multi_row, units=units,
             parent_key=parent, formula_system=formula_system,
             formula_component=formula_component, formula_parameters=formula_parameters,
@@ -157,18 +178,18 @@ def _row_to_spec(row):
         linked_mode = "override_only" if linked_mode_raw == "override only" else "choice"
 
         return component_spec(
-            key, str(row["Label"]).strip(), str(row["Apparatus"]).strip(), kind,
+            key, str(row["Apparatus"]).strip(), str(row["ID_Linked_to_EC_Database"]).strip(), kind,
             disclaimer=disclaimer, parent_key=str(row.get("Parent", "")).strip(),
             linked_mode=linked_mode,
         )
 
     if kind == KIND_CROSS_CATEGORY_COUNTER:
 
-        apparatus = row.get("Apparatus")
-        apparatus = str(apparatus).strip() if not pd.isna(apparatus) else None
+        ec_id = row.get("ID_Linked_to_EC_Database")
+        ec_id = str(ec_id).strip() if not pd.isna(ec_id) else None
 
         return component_spec(
-            key, str(row["Label"]).strip(), apparatus, kind,
+            key, str(row["Apparatus"]).strip(), ec_id, kind,
             disclaimer=disclaimer, counted_apparatus=_split_list(row.get("Counted Apparatus")),
         )
 
@@ -209,12 +230,12 @@ def load_ui_structure():
 
     for _, row in df.iterrows():
 
-        if pd.isna(row.get("Category")) or pd.isna(row.get("Label")):
+        if pd.isna(row.get("Category")) or pd.isna(row.get("Apparatus")):
             continue
 
         cat_num = int(row["Category"])
         cat_display_name = row.get("Category Name")
-        group_name = row.get("Group")
+        group_name = row.get("System")
         group_name = str(group_name).strip() if not pd.isna(group_name) and str(group_name).strip() else None
 
         if not pd.isna(cat_display_name) and str(cat_display_name).strip():
@@ -224,11 +245,42 @@ def load_ui_structure():
 
         archetype_raw = str(row.get("Archetype", "")).strip().lower()
 
-        if archetype_raw == UNAVAILABLE_ARCHETYPE:
-            sub_name = str(row["Label"]).strip()
-            if sub_name not in category_subcategories[cat_num]:
-                category_subcategories[cat_num].append(sub_name)
-            subcategory_kind[(cat_num, sub_name)] = "unavailable"
+        # A blank/unset Archetype means the row has been declared
+        # (Category + Apparatus filled in) but not yet configured -
+        # treat it the same as the explicit "Unavailable" sentinel
+        # rather than raising, so an incomplete taxonomy row can't
+        # crash the whole page.
+        if archetype_raw == UNAVAILABLE_ARCHETYPE or archetype_raw in ("", "nan"):
+            apparatus_label = str(row["Apparatus"]).strip()
+            disclaimer_info = row.get("Disclaimer / Info")
+            disclaimer_info = (
+                None
+                if pd.isna(disclaimer_info) or not str(disclaimer_info).strip()
+                else str(disclaimer_info).strip()
+            )
+
+            # Keep unavailable apparatus inside their declared System group.
+            # Previously this branch ignored System and registered each row as
+            # a standalone subcategory, which is why unavailable items appeared
+            # below the group instead of inside its dropdown.
+            if group_name:
+                if group_name not in category_subcategories[cat_num]:
+                    category_subcategories[cat_num].append(group_name)
+                    subcategory_kind[(cat_num, group_name)] = "component_group"
+                    group_definitions[(cat_num, group_name)] = []
+
+                key = apparatus_label.lower().replace(" ", "_")
+                group_definitions[(cat_num, group_name)].append(
+                    component_spec(
+                        key, apparatus_label, None, KIND_UNAVAILABLE,
+                        disclaimer=disclaimer_info or "This is not available.",
+                        info=disclaimer_info,
+                    )
+                )
+            else:
+                if apparatus_label not in category_subcategories[cat_num]:
+                    category_subcategories[cat_num].append(apparatus_label)
+                subcategory_kind[(cat_num, apparatus_label)] = "unavailable"
             continue
 
         spec = _row_to_spec(row)

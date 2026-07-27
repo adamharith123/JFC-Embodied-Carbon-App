@@ -73,6 +73,7 @@ STATUS_DISPLAY_LABELS = {
 KIND_INPUT = "input"
 KIND_LINKED_CHILD = "linked_child"
 KIND_CROSS_CATEGORY_COUNTER = "cross_category_counter"
+KIND_UNAVAILABLE = "unavailable"
 
 MODE_LABELS = {
     "quantity": "Total Quantity (Units)",
@@ -87,6 +88,23 @@ PROJECT_INFO_ALIASES = {
     "risers": "building_risers",
 }
 MODE_LABEL_TO_KEY = {v: k for k, v in MODE_LABELS.items()}
+
+
+def _mode_display_label(label, spec):
+    """
+    Display-only override for the Determination Type dropdown: shows
+    the component's real unit (from ui_structure's Units column)
+    instead of the generic "(Units)" placeholder baked into
+    MODE_LABELS. Purely cosmetic - the underlying value Streamlit
+    tracks and every other piece of code matches against (session
+    state, MODE_LABEL_TO_KEY, the DTS exclusion filter) is untouched,
+    same pattern already used for STATUS_DISPLAY_LABELS above.
+    """
+    if label == MODE_LABELS["quantity"]:
+        unit_label = spec["units"][0] if spec.get("units") else "units"
+        return f"Total Quantity ({unit_label})"
+    return label
+
 
 LINKED_CHILD_MODES = ["Equal to Parent", "Quantity Override"]
 
@@ -240,6 +258,9 @@ def _empty_multi_row_table():
 def init_component_state(spec):
     kind = spec["kind"]
 
+    if kind == KIND_UNAVAILABLE:
+        return {}
+
     if kind == KIND_INPUT:
         if spec["multi_row"]:
             return {"table": _empty_multi_row_table()}
@@ -353,6 +374,14 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     kind = spec["kind"]
     dirty = False
+
+    # -------- Unavailable --------
+
+    if kind == KIND_UNAVAILABLE:
+        if show_label:
+            st.markdown(f"**{spec['label']}**")
+        st.info(spec.get("disclaimer") or "This is not available.")
+        return False
 
     # -------- Linked Child --------
 
@@ -571,6 +600,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 new_mode = st.selectbox(
                     "Determination Type", dts_mode_options,
                     index=default_index,
+                    format_func=lambda m: _mode_display_label(m, spec),
                     key=f"{key_prefix}_{spec['key']}_det",
                 )
             st.caption("DTS: Total Quantity isn't offered here - every other method traces to an AS Calc Sheet default.")
@@ -580,6 +610,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 new_mode = st.selectbox(
                     "Determination Type", mode_options,
                     index=mode_options.index(comp_state["determination_type"]),
+                    format_func=lambda m: _mode_display_label(m, spec),
                     key=f"{key_prefix}_{spec['key']}_det",
                 )
             col_i += 1
@@ -619,7 +650,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                 values["grid_spacing_side"] = new_value
             else:
                 unit_label = spec["units"][0] if spec["units"] else "units"
-                value_label = "Value" if show_det_col else f"Value ({unit_label})"
+                value_label = f"Value ({unit_label})"
                 new_value = st.number_input(
                     value_label, min_value=0.0, step=1.0,
                     value=float(comp_state.get("value") or 0.0),
@@ -697,7 +728,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 def _render_info_panel(spec, formula_notes=None):
     """
     Collapsed-by-default panel showing the plain-English explanation
-    from ui_structure's "Info" column, plus - for Formula-mode
+    from ui_structure's "Disclaimer / Info" column, plus - for Formula-mode
     components - the calc_rules "notes" behind each parameter it
     pulls. Both are spreadsheet-maintained; nothing here is hardcoded
     per apparatus.
@@ -971,6 +1002,9 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
     project_info = project_info or {}
     kind = spec["kind"]
 
+    if kind == KIND_UNAVAILABLE:
+        return []
+
     if kind == KIND_LINKED_CHILD:
 
         if not comp_state.get("included"):
@@ -1089,7 +1123,14 @@ def component_group_design_rows(cat_name, specs, group_state):
         comp_state = group_state["components"][spec["key"]]
         kind = spec["kind"]
 
-        if kind == KIND_LINKED_CHILD:
+        if kind == KIND_UNAVAILABLE:
+            rows.append({
+                "Category": cat_name, "Subcategory": spec["label"],
+                "Status": "Unavailable", "Determination Type": None,
+                "Value": None, "Product Type": None, "Hazard Rating": None,
+            })
+
+        elif kind == KIND_LINKED_CHILD:
             rows.append({
                 "Category": cat_name, "Subcategory": spec["label"],
                 "Status": "Included" if comp_state.get("included") else "Excluded",
