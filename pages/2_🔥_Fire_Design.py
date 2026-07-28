@@ -641,7 +641,7 @@ if st.session_state.test_step == 1:
 
             with row2_col2:
                 building_fire_stairs = st.number_input(
-                    "Number of Fire Stairs",
+                    "Number of Fire Stairs per Storey",
                     min_value=0,
                     step=1,
                     key="test_building_fire_stairs",

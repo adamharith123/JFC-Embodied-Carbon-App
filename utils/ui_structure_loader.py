@@ -34,10 +34,41 @@ Expected columns in the "ui_structure" sheet:
                            than raising an error, since declared-but-
                            not-yet-configured rows are expected while
                            the taxonomy is being built out.
-    Include Spacing      - Y/N (Input archetype only)
-    Units                - comma-separated, e.g. "m2" or "kg,L"
-                            (Input archetype only, ignored if Include
-                            Spacing is Y)
+    Include Spacing      - (legacy column name, no longer read - see
+                            Modes below)
+    Modes                 - comma-separated determination methods
+                            offered for this apparatus (Input
+                            archetype only) - "Coverage Area",
+                            "Grid Spacing". Only relevant for a
+                            Case A apparatus (a Formula that has one
+                            "design parameter" beyond pure Building
+                            Inputs, see component_groups.py's
+                            _classify_input_case) - it's how the
+                            engineer chooses which unit to view/enter
+                            that one design parameter in; Grid Spacing
+                            and Coverage Area are the same parameter,
+                            just entered as a side length vs raw area.
+                            Ignored entirely for Case B/C apparatus
+                            (no design parameter to offer a unit
+                            choice for).
+    Formula               - free-text formula (e.g.
+                            "number_of_storey * floor_area_per_storey
+                            / smoke_detector_coverage_area") evaluated
+                            by utils/formula_engine.py against Building
+                            Inputs and, for Case A apparatus, one
+                            Condition-sheet parameter. Blank means no
+                            formula exists yet (Case C - plain typed
+                            input) - see component_groups.py's
+                            _render_standardized_input_component.
+    Quantity Unit         - the EC database's declared unit for this
+                            apparatus (e.g. "kg", "m2", "units") -
+                            purely a display label for the Declared
+                            Unit(x) column, matches the "Units" column
+                            already present in the Carbon Database's
+                            Apparatus Output sheet for every Product
+                            Type under this apparatus (empirically
+                            always consistent across Product Types
+                            today - not enforced by code).
     Parent               - the Apparatus name this mirrors (Linked
                             Child), or blank
     Linked Mode          - "Choice" or "Override Only" (Linked Child
@@ -150,15 +181,12 @@ def _row_to_spec(row):
         modes = [MODE_NAME_MAP.get(m.strip().lower(), "quantity") for m in modes_raw]
 
         multi_row = str(row.get("Allow Multiple Rows", "")).strip().upper() == "Y"
-        units = _split_list(row.get("Units")) or ["units"]
 
-        formula_system = row.get("Formula System")
-        formula_system = str(formula_system).strip() if not pd.isna(formula_system) and str(formula_system).strip() else None
+        formula_text = row.get("Formula")
+        formula_text = str(formula_text).strip() if not pd.isna(formula_text) and str(formula_text).strip() else None
 
-        formula_component = row.get("Formula Component")
-        formula_component = str(formula_component).strip() if not pd.isna(formula_component) and str(formula_component).strip() else None
-
-        formula_parameters = _split_list(row.get("Formula Parameters"))
+        quantity_unit = row.get("Quantity Unit")
+        quantity_unit = str(quantity_unit).strip() if not pd.isna(quantity_unit) and str(quantity_unit).strip() else "units"
 
         parent = row.get("Parent")
         parent = str(parent).strip() if not pd.isna(parent) and str(parent).strip() else None
@@ -167,9 +195,8 @@ def _row_to_spec(row):
 
         return component_spec(
             key, str(row["Apparatus"]).strip(), str(row["ID_Linked_to_EC_Database"]).strip(), kind,
-            disclaimer=disclaimer, modes=modes, multi_row=multi_row, units=units,
-            parent_key=parent, formula_system=formula_system,
-            formula_component=formula_component, formula_parameters=formula_parameters,
+            disclaimer=disclaimer, modes=modes, multi_row=multi_row,
+            parent_key=parent, formula_text=formula_text, quantity_unit=quantity_unit,
             frl_lookup=frl_lookup, info=info,
         )
 

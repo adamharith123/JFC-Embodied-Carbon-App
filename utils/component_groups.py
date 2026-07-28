@@ -42,14 +42,13 @@ from utils.proposed_design_calculations import (
     get_frl_options,
     resolve_frl_multiplier,
 )
-from utils.standards_engine import (
-    calculate_quantity as evaluate_calc_rules_formula,
-    resolve_default_variables,
-    get_notes as get_calc_rules_notes,
-    get_parameter,
-    get_available_condition_values,
-    formula_variable_names,
+from utils.formula_engine import (
+    extract_formula_variables,
+    evaluate_formula,
+    solve_formula_for_variable,
+    FormulaError,
 )
+from utils.condition_loader import get_condition_value, parameter_condition_key
 import math
 
 
@@ -75,40 +74,46 @@ KIND_LINKED_CHILD = "linked_child"
 KIND_CROSS_CATEGORY_COUNTER = "cross_category_counter"
 KIND_UNAVAILABLE = "unavailable"
 
-MODE_LABELS = {
-    "quantity": "Total Quantity (Units)",
-    "grid_spacing": "Grid Spacing (Side length metres)",
-    "coverage_area": "Coverage Area (m² per unit)",
-    "formula": "Formula (AS Calc Sheet)",
-}
-PROJECT_INFO_ALIASES = {
-    "protected_area": "building_area",
-    "storeys": "building_storeys",
+GRID_SPACING_LABEL = "Grid Spacing (m)"
+COVERAGE_AREA_LABEL = "Coverage Area (m²)"
+FORMULA_BUILDING_INPUTS_LABEL = "Formula (Building Inputs)"
+DIRECT_ENTRY_LABEL = "Direct Entry"
+
+# Formula-column variable name -> the project_info key that variable
+# actually resolves to. Building Input widget keys (BUILDING_INPUT_WIDGET_KEYS
+# in the Fire Design page) don't match ui_structure's Formula-column
+# naming 1:1, so this is the one place that translation happens.
+# floor_area_per_storey happens to be spelled the same in both and so
+# needs no entry. floor_to_floor_height/exits_per_storey aren't used by
+# any current Formula, but are mapped now in case a future formula
+# needs them.
+BUILDING_INPUT_ALIASES = {
+    "number_of_storey": "building_storeys",
+    "floor_area_per_storey": "floor_area_per_storey",  # spelled the same in both places
+    "effective_height": "building_effective_height",
+    "fire_stairs_per_stoery": "building_fire_stairs",  # sic - matches ui_structure's spelling
+    "room_number": "building_rooms",
     "floor_to_floor_height": "building_floor_to_floor_height",
-    "risers": "building_risers",
+    "exits_per_storey": "building_exits_per_storey",
+    # Not a Formula-column variable - this is the Condition sheet's
+    # "Condition key" value for sprinkler_coverage_area today. Kept
+    # here as a synonym purely so a Condition-sheet lookup resolves to
+    # the same Building Input as "sprinkler_hazard_classification"
+    # would. Fragile: if the Condition sheet ever adds a second
+    # differently-spelled key for the same Building Input, or the
+    # naming changes, this needs updating by hand - flagged to the
+    # team as worth standardizing on one literal name instead.
+    "fire_hazard": "sprinkler_hazard_classification",
+    "sprinkler_hazard_classification": "sprinkler_hazard_classification",
 }
-MODE_LABEL_TO_KEY = {v: k for k, v in MODE_LABELS.items()}
 
-
-def _mode_display_label(label, spec):
-    """
-    Display-only override for the Determination Type dropdown: shows
-    the component's real unit (from ui_structure's Units column)
-    instead of the generic "(Units)" placeholder baked into
-    MODE_LABELS. Purely cosmetic - the underlying value Streamlit
-    tracks and every other piece of code matches against (session
-    state, MODE_LABEL_TO_KEY, the DTS exclusion filter) is untouched,
-    same pattern already used for STATUS_DISPLAY_LABELS above.
-    """
-    if label == MODE_LABELS["quantity"]:
-        unit_label = spec["units"][0] if spec.get("units") else "units"
-        return f"Total Quantity ({unit_label})"
-    return label
+# ==========================================================
+# Case classification (Case A/B/C - see _classify_input_case)
+# ==========================================================
 
 
 LINKED_CHILD_MODES = ["Equal to Parent", "Quantity Override"]
 
-DEFAULT_UNITS = ["units"]
 DEFAULT_MODES = ["quantity"]
 
 
@@ -124,10 +129,8 @@ def component_spec(
     linked_mode="choice",
     modes=None,
     multi_row=False,
-    units=None,
-    formula_system=None,
-    formula_component=None,
-    formula_parameters=None,
+    quantity_unit="units",
+    formula_text=None,
     counted_apparatus=None,
     manual_allowed=True,
     frl_lookup=False,
@@ -138,23 +141,32 @@ def component_spec(
     key, label, apparatus, kind : as before
 
     -- KIND_INPUT --
-    modes             : list of mode keys from MODE_LABELS, in the
-                         order they should appear in the dropdown.
-                         Only shown as a dropdown if len(modes) > 1;
-                         a single-mode component just shows a plain
-                         Value field.
-    multi_row         : if True, renders as a dynamic table (like
-                         Sprinkler Heads) where the engineer can add
-                         rows to mix Product Types / determination
-                         methods within one system.
-    units             : display unit(s) for "Total Quantity" mode
-                         (only meaningful when "quantity" is in modes)
-    formula_system / formula_component / formula_parameters :
-                         where to look up the "Formula" mode's value
-                         in the calc_rules sheet - formula_parameters
-                         is a list of parameter names, summed together
-                         (e.g. ["vertical_riser_formula",
-                         "horizontal_pipe_formula"])
+    modes             : list of mode keys ("grid_spacing"/
+                         "coverage_area"; "quantity"/"formula" are
+                         parsed for backward compatibility but no
+                         longer mean anything - see
+                         _classify_input_case) - only consulted for a
+                         Case A apparatus, to decide whether the
+                         engineer can view/enter its one design
+                         parameter as a Grid Spacing side length as
+                         well as a raw Coverage Area.
+    multi_row         : legacy flag from the "Allow Multiple Rows"
+                         column - no longer read by the renderer
+                         (every Input component now uses the same
+                         table; DTS locks to a single row for Case
+                         A/B, Manual Override and Case C always allow
+                         adding rows). Kept only so old callers/tests
+                         passing it don't break.
+    quantity_unit     : the EC database's declared unit for this
+                         apparatus (e.g. "kg", "m2", "units") - purely
+                         a display label for the Declared Unit(x)
+                         column.
+    formula_text      : the free-text formula from ui_structure's
+                         "Formula" column (or None). Drives which of
+                         Case A / B / C this apparatus is - see
+                         utils/component_groups.py's
+                         _classify_input_case() and
+                         utils/formula_engine.py.
 
     -- KIND_LINKED_CHILD --
     parent_key        : the apparatus label whose quantity this
@@ -167,18 +179,10 @@ def component_spec(
     counted_apparatus : list of Apparatus labels to offer as checkboxes
     manual_allowed    : whether a manual quantity field is also shown
 
-    -- KIND_INPUT, Formula mode --
-    A component using Formula mode can also set parent_key - if set,
-    two extra variables become available to its formula:
-    parent_quantity and parent_spacing_area/spacing_area (the
-    referenced parent's calculated quantity, and its area-per-unit
-    figure if it used Grid Spacing or Coverage Area mode).
-
     disclaimer        : optional warning caption shown under the input
 
-    frl_lookup        : (KIND_INPUT, non-multi-row only) if True,
-                         renders a separate "Required FRL (min)"
-                         selector next to Value/Product Type, and
+    frl_lookup        : (KIND_INPUT) if True, adds a "Required FRL
+                         (min)" column to the standardized table, and
                          converts the entered quantity into a carbon
                          quantity via the frl_reference sheet before
                          pricing it against Product Type's carbon
@@ -201,10 +205,8 @@ def component_spec(
         "linked_mode": linked_mode,
         "modes": modes or DEFAULT_MODES,
         "multi_row": multi_row,
-        "units": units or DEFAULT_UNITS,
-        "formula_system": formula_system,
-        "formula_component": formula_component,
-        "formula_parameters": formula_parameters or [],
+        "quantity_unit": quantity_unit or "units",
+        "formula_text": formula_text,
         "counted_apparatus": counted_apparatus or [],
         "manual_allowed": manual_allowed,
         "frl_lookup": frl_lookup,
@@ -251,8 +253,11 @@ def get_spacing_area_by_apparatus(results, apparatus_label):
 # State Initialization
 # ==========================================================
 
-def _empty_multi_row_table():
-    return pd.DataFrame(columns=["Determination Type", "Value", "Product Type"])
+def _empty_multi_row_table(include_frl=False):
+    columns = ["Determination Type", "Value", "Product Type", "Declared Unit"]
+    if include_frl:
+        columns.append("Required FRL (min)")
+    return pd.DataFrame(columns=columns)
 
 
 def init_component_state(spec):
@@ -262,14 +267,13 @@ def init_component_state(spec):
         return {}
 
     if kind == KIND_INPUT:
-        if spec["multi_row"]:
-            return {"table": _empty_multi_row_table()}
+        # Standardized DTS/Manual Override panel - every Input
+        # component (regardless of the ui_structure "Allow Multiple
+        # Rows" flag), including FRL-based Wall Assemblies, uses this
+        # same table shape. See _render_standardized_input_component.
         return {
             "status": STATUS_NA,
-            "determination_type": MODE_LABELS[spec["modes"][0]],
-            "value": None,
-            "product_type": None,
-            "frl_min": None,
+            "table": _empty_multi_row_table(include_frl=spec.get("frl_lookup", False)),
         }
 
     if kind == KIND_LINKED_CHILD:
@@ -292,74 +296,126 @@ def init_group_state(specs):
         "components": {spec["key"]: init_component_state(spec) for spec in specs},
     }
 
-def _resolve_sheet_default(spec, parameter_name, comp_state, key_prefix, project_info=None, selector_label=None):
+
+def _classify_input_case(spec):
     """
-    Resolves one named variable to a defensible starting value, in
-    priority order: (1) an unconditional AS Calc Sheet default under
-    this component's Formula System/Component, (2) if the sheet
-    instead defines several named options for it (e.g. hazard class)
-    with no single default, renders the selector to choose between
-    them, (3) the matching Project Info field, (4) nothing - the
-    field starts blank and the user must type a value.
+    Classifies a KIND_INPUT apparatus per the three-case model:
 
-    This is the one lookup behind Coverage Area, Grid Spacing, and
-    the Formula-mode variable panel alike.
+      "A" - has a Formula, AND that Formula references exactly one
+            variable that ISN'T a Building Input (a "design
+            parameter", e.g. smoke_detector_coverage_area, resolved
+            from the Condition sheet). DTS auto-computes & locks;
+            Manual Override lets the design parameter be entered
+            either as Value or back-solved from Declared Unit(x).
+      "B" - has a Formula, but it's 100% Building Inputs (e.g. Manual
+            Call Points: storeys * fire_stairs). DTS auto-computes &
+            locks, same as A; Manual Override is a plain override -
+            there's no design parameter to solve for, so Value and
+            Declared Unit(x) just mirror each other.
+      "C" - no Formula at all yet. Plain typed input under both DTS
+            and Manual Override - Value and Declared Unit(x) mirror
+            each other. This is the expected state for "EC database,
+            no Formula yet" apparatus, and the only case where DTS
+            doesn't compute anything. A malformed Formula string
+            (fails formula_engine's validation - e.g. a missing
+            function wrapper) also degrades to Case C rather than
+            crashing the page - see the "malformed" flag below.
+
+    Returns (case, design_parameter_name_or_None, malformed_bool).
+    A malformed Formula is a real ui_structure data problem worth
+    fixing, not a normal in-progress state like a blank Formula cell -
+    callers should surface it rather than silently treating it the
+    same as "no Formula yet".
     """
-    system, component = spec.get("formula_system"), spec.get("formula_component")
+    formula_text = spec.get("formula_text")
+    if not formula_text:
+        return "C", None, False
 
-    if system and component:
+    try:
+        variables = extract_formula_variables(formula_text)
+    except FormulaError:
+        return "C", None, True
 
-        unconditional = get_parameter(system, component, parameter_name)
-        if unconditional is not None:
-            return unconditional, "AS Calc Sheet default"
+    design_params = sorted(v for v in variables if v not in BUILDING_INPUT_ALIASES)
 
-        options = get_available_condition_values(system, component, parameter_name)
-        if options:
-            selectors = comp_state.setdefault("variable_selectors", {})
-            chosen = st.selectbox(
-                selector_label or f"{parameter_name.replace('_', ' ').title()} — condition", options,
-                index=options.index(selectors[parameter_name]) if selectors.get(parameter_name) in options else 0,
-                key=f"{key_prefix}_{parameter_name}_selector",
-            )
-            selectors[parameter_name] = chosen
-            return get_parameter(system, component, parameter_name, condition_value=chosen), f"AS Calc Sheet ({chosen})"
+    if design_params:
+        # Every current Formula has at most one - if a future one ever
+        # has more, this takes the first (alphabetically, for
+        # determinism) rather than crashing; that apparatus's Formula
+        # needs revisiting either way.
+        return "A", design_params[0], False
 
-    if project_info:
-        project_value = project_info.get(PROJECT_INFO_ALIASES.get(parameter_name, parameter_name))
-        if project_value:
-            return project_value, "Project Info"
-
-    return None, None
+    return "B", None, False
 
 
-def _render_variable_field(spec, parameter_name, comp_state, key_prefix, project_info=None, display_label=None):
+def _resolve_building_inputs(project_info):
     """
-    One editable numeric field, pre-filled via _resolve_sheet_default()
-    and always freely overridable - whatever's currently in the field
-    is what calculation will use. Persists to
-    comp_state["variable_values"][parameter_name].
+    Maps every Formula-column Building Input variable name to its
+    current project_info value (via BUILDING_INPUT_ALIASES). Missing/
+    unset inputs are simply absent from the returned dict -
+    evaluate_formula() treats a missing variable as "can't compute
+    yet", not an error.
     """
-    label = display_label or parameter_name.replace("_", " ").title()
-    values = comp_state.setdefault("variable_values", {})
+    project_info = project_info or {}
+    variables = {name: project_info.get(key) for name, key in BUILDING_INPUT_ALIASES.items()}
+    return {k: v for k, v in variables.items() if v is not None}
 
-    resolved_default, source = _resolve_sheet_default(
-        spec, parameter_name, comp_state, key_prefix,
-        project_info=project_info, selector_label=f"{label} — condition",
-    )
 
-    seed = values.get(parameter_name)
-    if seed is None and resolved_default is not None:
-        seed = resolved_default
+def _resolve_design_parameter(design_param_name, project_info):
+    """
+    Resolves a Case A apparatus's design parameter from the Condition
+    sheet - unconditioned if it only has a "default" row, otherwise
+    keyed off whichever Building Input the Condition sheet says it
+    depends on (e.g. Sprinkler Hazard Classification), read straight
+    from the already-set project_info value - never a second selector
+    rendered here, since that Building Input is already a single,
+    shared, project-level field the engineer sets once.
 
-    new_value = st.number_input(
-        label, min_value=0.0, step=0.1,
-        value=float(seed or 0.0),
-        key=f"{key_prefix}_{parameter_name}_value",
-        help=f"{source}: {resolved_default:g}" if resolved_default is not None else "No sheet default found - manual entry.",
-    )
+    Returns (value, note_or_None).
+    """
+    condition_key = parameter_condition_key(design_param_name)
+    condition_value = None
+    if condition_key:
+        project_key = BUILDING_INPUT_ALIASES.get(condition_key, condition_key)
+        condition_value = (project_info or {}).get(project_key)
+    return get_condition_value(design_param_name, condition_key, condition_value)
 
-    values[parameter_name] = new_value
-    return new_value, source
+
+def _value_to_design_param(determination_label, value):
+    """Converts a Determination-Type-labelled Value cell into the raw
+    design-parameter number the formula actually uses. Grid Spacing is
+    entered as a side length; the formula wants the area."""
+    if value is None:
+        return None
+    if determination_label == GRID_SPACING_LABEL:
+        return value ** 2
+    return value
+
+
+def _design_param_to_value(determination_label, design_param_value):
+    """Inverse of _value_to_design_param - what to display in the
+    Value cell for a given raw design-parameter number."""
+    if design_param_value is None:
+        return None
+    if determination_label == GRID_SPACING_LABEL:
+        return math.sqrt(design_param_value) if design_param_value > 0 else None
+    return design_param_value
+
+
+def _case_a_determination_options(spec):
+    """
+    Which of Grid Spacing / Coverage Area this apparatus's Modes
+    column offers as a way to view/enter its one design parameter -
+    defaults to Coverage Area only if Modes doesn't mention either
+    (the raw form the Condition sheet stores values in).
+    """
+    modes = spec.get("modes") or []
+    options = []
+    if "grid_spacing" in modes:
+        options.append(GRID_SPACING_LABEL)
+    if "coverage_area" in modes:
+        options.append(COVERAGE_AREA_LABEL)
+    return options or [COVERAGE_AREA_LABEL]
 
 # ==========================================================
 # Rendering
@@ -369,6 +425,7 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
                       frl_reference_df=None):
     """
     Renders the widgets for a single component and mutates comp_state
+
     in place. Returns True if anything changed.
     """
 
@@ -511,219 +568,293 @@ def render_component(spec, comp_state, apparatus_output_df, parent_quantity=None
 
     # -------- Input --------
 
-    formula_notes = None
+    # Every Input component - including FRL-based Wall Assemblies -
+    # now uses the same standardized N/A / DTS / Manual Override
+    # table.
+    return _render_standardized_input_component(
+        spec, comp_state, apparatus_output_df, project_info, key_prefix, show_label,
+        frl_reference_df=frl_reference_df,
+    )
 
-    if not spec["multi_row"]:
 
-        status_options = [STATUS_NA, STATUS_DTS, STATUS_PBD]
-        current_status = comp_state.get("status", STATUS_NA)
-        if current_status not in status_options:
-            current_status = STATUS_NA
+def _approx_equal(a, b, tol=1e-9):
+    if a is None or b is None:
+        return a is b
+    try:
+        fa, fb = float(a), float(b)
+    except (TypeError, ValueError):
+        return a == b
+    if pd.isna(fa) or pd.isna(fb):
+        return pd.isna(fa) and pd.isna(fb)
+    return math.isclose(fa, fb, rel_tol=tol, abs_tol=tol)
 
-        name_col, status_col = st.columns([2, 3])
 
-        with name_col:
-            if show_label:
-                st.markdown(f"**{spec['label']}**")
+def _blank(v):
+    return v is None or (isinstance(v, float) and pd.isna(v))
 
-        with status_col:
-            new_status = st.radio(
-                spec["label"], status_options, index=status_options.index(current_status),
-                horizontal=True, key=f"{key_prefix}_{spec['key']}_status", label_visibility="collapsed",
-                format_func=lambda s: STATUS_DISPLAY_LABELS.get(s, s),
+
+def _frl_options_all_products(frl_reference_df, apparatus_output_df, spec):
+    """
+    Every "Required FRL (min)" value valid for at least one Product
+    Type of this apparatus (e.g. Plasterboard's board-thickness table
+    varies by Product Type). A data-table's Selectbox column can't
+    offer per-row options conditioned on that row's own Product Type
+    the way a single free-standing selector could, so this offers the
+    union of everything valid for any Product Type - the actual
+    Product Type + FRL combination for each row is re-validated at
+    Calculate time (_apply_frl_lookup): a row pairing an FRL with a
+    Product Type that doesn't actually support it gets a warning and
+    is excluded, rather than silently mispriced.
+    """
+    apparatus = spec["apparatus"]
+    options = set(get_frl_options(frl_reference_df, apparatus, None))
+    for product in get_available_product_types(apparatus_output_df, apparatus):
+        options.update(get_frl_options(frl_reference_df, apparatus, product))
+    return sorted(options)
+
+
+def _sync_value_declared_unit(edited, prev_table, case, spec, design_param_name, building_inputs):
+    """
+    Two-way sync between the Value and Declared Unit(x) columns after
+    an edit, matching rows to their previous state by position:
+
+      - Case A: whichever column the engineer just typed into drives
+        the other, through the real Formula (Declared Unit(x) ->
+        Value back-solves numerically via
+        formula_engine.solve_formula_for_variable).
+      - Case B/C: no design parameter to solve for - the two columns
+        are a plain 1:1 mirror of each other.
+
+    If both columns changed at once on the same row (e.g. a paste, or
+    a brand-new row where neither has a previous value to diff
+    against), Value is treated as the one that drives Declared Unit(x).
+    Mutates and returns `edited`.
+    """
+    for i in edited.index:
+        det_label = edited.at[i, "Determination Type"]
+        value = edited.at[i, "Value"]
+        declared = edited.at[i, "Declared Unit"]
+
+        prev_value = prev_declared = None
+        if prev_table is not None and i in prev_table.index:
+            prev_value = prev_table.at[i, "Value"]
+            prev_declared = prev_table.at[i, "Declared Unit"]
+
+        value_changed = not _approx_equal(value, prev_value)
+        declared_changed = not _approx_equal(declared, prev_declared)
+
+        if _blank(value) and _blank(declared):
+            continue
+
+        if case in ("B", "C"):
+            if declared_changed and not value_changed:
+                edited.at[i, "Value"] = declared
+            else:
+                edited.at[i, "Declared Unit"] = value
+            continue
+
+        # Case A - real back-solve through the Formula.
+        if declared_changed and not value_changed and not _blank(declared):
+            solved = solve_formula_for_variable(
+                spec["formula_text"], building_inputs, design_param_name, float(declared),
             )
+            if solved is not None:
+                edited.at[i, "Value"] = _design_param_to_value(det_label, solved)
+        else:
+            design_param = _value_to_design_param(det_label, value)
+            variables = dict(building_inputs)
+            if design_param is not None:
+                variables[design_param_name] = design_param
+            computed = evaluate_formula(spec["formula_text"], variables)
+            if computed is not None:
+                edited.at[i, "Declared Unit"] = computed
 
-        if new_status != comp_state.get("status"):
-            comp_state["status"] = new_status
-            dirty = True
+    return edited
 
-        if comp_state["status"] == STATUS_NA:
-            if spec.get("disclaimer"):
-                st.caption(f"⚠️ {spec['disclaimer']}")
-            _render_info_panel(spec)
-            return dirty
 
-    elif show_label:
-        st.markdown(f"**{spec['label']}**")
+def _render_standardized_input_component(spec, comp_state, apparatus_output_df, project_info, key_prefix, show_label,
+                                          frl_reference_df=None):
+    """
+    Standardized N/A / DTS / Manual Override panel used by every Input
+    component, including FRL-based Wall Assemblies. Always the same 4
+    columns - Determination Type / Value / Product Type / Declared
+    Unit(x) - plus Required FRL (min) for Wall Assemblies.
 
-    product_options = get_available_product_types(apparatus_output_df, spec["apparatus"])
-    mode_options = [MODE_LABELS[m] for m in spec["modes"]]
-    show_mode_dropdown = len(mode_options) > 1
-    is_dts = (not spec["multi_row"]) and comp_state.get("status") == STATUS_DTS
+    Which of Case A / B / C this apparatus is (see
+    _classify_input_case) decides Determination Type's options and
+    how Value/Declared Unit(x) relate - never a different table shape:
 
-    if spec["multi_row"]:
+      Case A (Formula + one design parameter, e.g. Smoke Detectors):
+        Determination Type offers Grid Spacing / Coverage Area (which
+        unit to view/enter the design parameter in - the same
+        parameter either way). DTS resolves the parameter from the
+        Condition sheet + Building Inputs and locks the row (single
+        row, nothing else to add). Manual Override lets either Value
+        or Declared Unit(x) be typed, back-solving the other through
+        the real Formula.
+      Case B (Formula, but 100% Building Inputs, e.g. Manual Call
+        Points): Determination Type is fixed to "Formula (Building
+        Inputs)". DTS locks the row the same way as Case A. Manual
+        Override is a plain override - Value and Declared Unit(x)
+        just mirror each other, since there's no design parameter to
+        solve for.
+      Case C (no Formula yet): Determination Type is fixed to "Direct
+        Entry". DTS is plain typed input too (nothing to compute yet)
+        - Value and Declared Unit(x) mirror each other under both
+        statuses, and the table stays a normal add/remove-rows table.
 
-        column_config = {
-            "Determination Type": st.column_config.SelectboxColumn(
-                "Determination Type", options=mode_options, required=True,
-                disabled=not show_mode_dropdown,
-            ),
-            "Value": st.column_config.NumberColumn("Value", min_value=0.0, required=True),
-            "Product Type": st.column_config.SelectboxColumn(
-                "Product Type",
-                options=product_options if product_options else ["No products found"],
-                required=False,
-            ),
-        }
+    DTS only ever locks the table to a single row (Case A/B) - editing
+    which Product Type or splitting a total across several Product
+    Types with your own judgement calls is what Manual Override is
+    for, not something DTS auto-splits on your behalf.
+    """
 
-        edited = st.data_editor(
-            comp_state["table"], width='stretch', hide_index=True,
-            num_rows="dynamic", column_config=column_config,
-            key=f"{key_prefix}_{spec['key']}_table",
+    dirty = False
+
+    status_options = [STATUS_NA, STATUS_DTS, STATUS_PBD]
+    current_status = comp_state.get("status", STATUS_NA)
+    if current_status not in status_options:
+        current_status = STATUS_NA
+
+    name_col, status_col = st.columns([2, 3])
+
+    with name_col:
+        if show_label:
+            st.markdown(f"**{spec['label']}**")
+
+    with status_col:
+        new_status = st.radio(
+            spec["label"], status_options, index=status_options.index(current_status),
+            horizontal=True, key=f"{key_prefix}_{spec['key']}_status", label_visibility="collapsed",
+            format_func=lambda s: STATUS_DISPLAY_LABELS.get(s, s),
         )
 
-        if not edited.equals(comp_state["table"]):
-            comp_state["table"] = edited
-            dirty = True
+    if new_status != comp_state.get("status"):
+        comp_state["status"] = new_status
+        dirty = True
 
+    if comp_state["status"] == STATUS_NA:
+        if spec.get("disclaimer"):
+            st.caption(f"⚠️ {spec['disclaimer']}")
+        _render_info_panel(spec)
+        return dirty
+
+    case, design_param_name, malformed = _classify_input_case(spec)
+    if malformed:
+        st.caption(
+            f"⚠️ This apparatus's Formula in ui_structure couldn't be parsed - treating it as "
+            f"'no Formula yet' for now. Raw text: `{spec.get('formula_text')}`"
+        )
+    is_dts = comp_state["status"] == STATUS_DTS
+    locked = is_dts and case in ("A", "B")
+
+    if case == "A":
+        det_options = _case_a_determination_options(spec)
+    elif case == "B":
+        det_options = [FORMULA_BUILDING_INPUTS_LABEL]
     else:
+        det_options = [DIRECT_ENTRY_LABEL]
 
-        show_frl = bool(spec.get("frl_lookup"))
-        show_det_col = is_dts or show_mode_dropdown
-        n_cols = (1 if show_det_col else 0) + 2 + (1 if show_frl else 0)
-        cols = st.columns(n_cols)
-        col_i = 0
+    product_options = get_available_product_types(apparatus_output_df, spec["apparatus"])
+    building_inputs = _resolve_building_inputs(project_info)
 
-        if is_dts:
-            dts_mode_options = [
-                m for m in mode_options
-                if m != MODE_LABELS["quantity"]
-                and not (m == MODE_LABELS["formula"] and not spec.get("formula_system"))
-            ] or mode_options
-            with cols[col_i]:
-                if comp_state.get("determination_type") in dts_mode_options:
-                    default_index = dts_mode_options.index(comp_state["determination_type"])
-                elif MODE_LABELS["formula"] in dts_mode_options:
-                    default_index = dts_mode_options.index(MODE_LABELS["formula"])
-                else:
-                    default_index = 0
-                new_mode = st.selectbox(
-                    "Determination Type", dts_mode_options,
-                    index=default_index,
-                    format_func=lambda m: _mode_display_label(m, spec),
-                    key=f"{key_prefix}_{spec['key']}_det",
-                )
-            st.caption("DTS: Total Quantity isn't offered here - every other method traces to an AS Calc Sheet default.")
-            col_i += 1
-        elif show_mode_dropdown:
-            with cols[col_i]:
-                new_mode = st.selectbox(
-                    "Determination Type", mode_options,
-                    index=mode_options.index(comp_state["determination_type"]),
-                    format_func=lambda m: _mode_display_label(m, spec),
-                    key=f"{key_prefix}_{spec['key']}_det",
-                )
-            col_i += 1
+    table = comp_state["table"]
+    if not table.index.equals(pd.RangeIndex(len(table))):
+        table = table.reset_index(drop=True)
+        comp_state["table"] = table
+
+    if locked:
+        # DTS, Case A/B: exactly one row, auto-computed, read-only.
+        existing = table.iloc[0] if not table.empty else {}
+        det_label = existing.get("Determination Type") if existing.get("Determination Type") in det_options else det_options[0]
+        product_type = existing.get("Product Type")
+
+        if case == "A":
+            design_value, source_note = _resolve_design_parameter(design_param_name, project_info)
+            value_display = _design_param_to_value(det_label, design_value)
+            variables = dict(building_inputs)
+            if design_value is not None:
+                variables[design_param_name] = design_value
+            declared_unit = evaluate_formula(spec["formula_text"], variables)
         else:
-            new_mode = mode_options[0]
+            source_note = None
+            declared_unit = evaluate_formula(spec["formula_text"], building_inputs)
+            value_display = declared_unit
 
-        mode_key = MODE_LABEL_TO_KEY.get(new_mode)
-        is_formula = mode_key == "formula"
+        row = {"Determination Type": det_label, "Value": value_display, "Product Type": product_type,
+               "Declared Unit": declared_unit}
+        if spec.get("frl_lookup") and "Required FRL (min)" in table.columns:
+            row["Required FRL (min)"] = existing.get("Required FRL (min)")
+        table = pd.DataFrame([row], columns=table.columns)
+        comp_state["table"] = table
 
-        with cols[col_i]:
-            if is_formula:
-                st.number_input(
-                    "Value — calculated automatically from AS Calc Sheet", value=0.0, disabled=True,
-                    key=f"{key_prefix}_{spec['key']}_value_disabled",
-                )
-                new_value = comp_state.get("value")
-            elif mode_key == "coverage_area":
-                unit_label = spec["units"][0] if spec["units"] else "m² per unit"
-                new_value, _ = _render_variable_field(
-                    spec, "coverage_area", comp_state, key_prefix, project_info=project_info,
-                    display_label=f"Coverage Area ({unit_label})",
-                )
-            elif mode_key == "grid_spacing":
-                area_default, area_source = _resolve_sheet_default(
-                    spec, "spacing_area", comp_state, key_prefix,
-                    project_info=project_info, selector_label="Hazard Classification",
-                )
-                values = comp_state.setdefault("variable_values", {})
-                seed = values.get("grid_spacing_side")
-                if seed is None and area_default:
-                    seed = math.sqrt(area_default)
-                new_value = st.number_input(
-                    "Grid Spacing (side length, m)", min_value=0.0, step=0.1,
-                    value=float(seed or 0.0), key=f"{key_prefix}_{spec['key']}_value",
-                    help=f"{area_source}: {area_default:g} m²/unit" if area_default else "No sheet default found - manual entry.",
-                )
-                values["grid_spacing_side"] = new_value
-            else:
-                unit_label = spec["units"][0] if spec["units"] else "units"
-                value_label = f"Value ({unit_label})"
-                new_value = st.number_input(
-                    value_label, min_value=0.0, step=1.0,
-                    value=float(comp_state.get("value") or 0.0),
-                    key=f"{key_prefix}_{spec['key']}_value",
-                )
-        col_i += 1
-
-        with cols[col_i]:
-            new_product = st.selectbox(
-                "Product Type", ["(none selected)"] + product_options,
-                index=(
-                    (["(none selected)"] + product_options).index(comp_state.get("product_type"))
-                    if comp_state.get("product_type") in product_options else 0
-                ),
-                key=f"{key_prefix}_{spec['key']}_product",
-            )
-        col_i += 1
-
-        resolved_product = None if new_product == "(none selected)" else new_product
-
-        new_frl = comp_state.get("frl_min")
-        if show_frl:
-            frl_options = get_frl_options(frl_reference_df, spec["apparatus"], resolved_product)
-            frl_choices = ["(none selected)"] + [str(f) for f in frl_options]
-            current = str(comp_state.get("frl_min")) if comp_state.get("frl_min") is not None else "(none selected)"
-            with cols[col_i]:
-                new_frl_choice = st.selectbox(
-                    "Required FRL (min)", frl_choices,
-                    index=frl_choices.index(current) if current in frl_choices else 0,
-                    key=f"{key_prefix}_{spec['key']}_frl",
-                )
-            new_frl = None if new_frl_choice == "(none selected)" else int(new_frl_choice)
-
-        if (new_mode != comp_state.get("determination_type") or new_value != comp_state.get("value")
-                or resolved_product != comp_state.get("product_type") or new_frl != comp_state.get("frl_min")):
-            comp_state["determination_type"] = new_mode
-            comp_state["value"] = new_value
-            comp_state["product_type"] = resolved_product
-            comp_state["frl_min"] = new_frl
-            dirty = True
-
-        if is_formula:
+        if declared_unit is None:
             st.caption(
-                f"Formula source: {spec['formula_system']} / {spec['formula_component']} "
-                f"({', '.join(spec['formula_parameters'])})"
+                "⏳ Not yet computed - fill in the Additional Building Inputs "
+                + ("and the Condition sheet entry for this apparatus " if case == "A" else "")
+                + "for this to auto-fill."
             )
+        elif source_note:
+            st.caption(f"DTS source: {source_note}")
 
-            needed_vars = set()
-            for p in spec["formula_parameters"]:
-                raw = get_parameter(spec["formula_system"], spec["formula_component"], p)
-                needed_vars |= formula_variable_names(raw)
+    column_config = {
+        "Determination Type": st.column_config.SelectboxColumn(
+            "Determination Type", options=det_options, required=True,
+            disabled=locked or len(det_options) <= 1, default=det_options[0],
+        ),
+        "Value": st.column_config.NumberColumn("Value", min_value=0.0, required=False, disabled=locked),
+        "Product Type": st.column_config.SelectboxColumn(
+            "Product Type",
+            options=product_options if product_options else ["No products found"],
+            required=False,
+        ),
+        "Declared Unit": st.column_config.NumberColumn(
+            f"Declared Unit ({spec.get('quantity_unit', 'units')})", min_value=0.0, required=False, disabled=locked,
+        ),
+    }
 
-            implicit_vars = {"parent_quantity", "parent_spacing_area"}
-            if spec.get("parent_key"):
-                implicit_vars.add("spacing_area")
-            needed_vars -= implicit_vars
+    show_frl = bool(spec.get("frl_lookup"))
+    if show_frl:
+        frl_values = _frl_options_all_products(frl_reference_df, apparatus_output_df, spec)
+        column_config["Required FRL (min)"] = st.column_config.SelectboxColumn(
+            "Required FRL (min)",
+            options=[str(f) for f in frl_values] if frl_values else ["No FRL data found"],
+            required=False,
+        )
 
-            formula_notes = [
-                (p, get_calc_rules_notes(spec["formula_system"], spec["formula_component"], p))
-                for p in spec["formula_parameters"]
-            ]
+    prev_table = comp_state["table"]
 
-            if needed_vars:
-                with st.expander(f"🔢 Formula inputs for {spec['label']}", expanded=is_dts):
-                    for var_name in sorted(needed_vars):
-                        _render_variable_field(spec, var_name, comp_state, key_prefix, project_info=project_info)
+    edited = st.data_editor(
+        comp_state["table"], width='stretch', hide_index=True,
+        num_rows="fixed" if locked else "dynamic", column_config=column_config,
+        key=f"{key_prefix}_{spec['key']}_table",
+    )
+    edited = edited.reset_index(drop=True)
+
+    if not locked:
+        edited = _sync_value_declared_unit(edited, prev_table, case, spec, design_param_name, building_inputs)
+
+    if not edited.equals(comp_state["table"]):
+        comp_state["table"] = edited
+        dirty = True
+
+    if case == "C" and is_dts:
+        st.caption("No Formula configured yet for this apparatus - DTS is a plain typed figure for now.")
+    elif case == "A":
+        st.caption(
+            "Grid Spacing and Coverage Area are the same design parameter, just entered in a different unit."
+            + (" Type either Value or Declared Unit - the other back-solves." if not locked else "")
+        )
+    elif case == "B" and not locked:
+        st.caption("This apparatus has no separate design parameter - Value and Declared Unit always match.")
 
     if spec.get("disclaimer"):
         st.caption(f"⚠️ {spec['disclaimer']}")
 
-    _render_info_panel(spec, formula_notes)
+    _render_info_panel(spec)
 
     return dirty
+
 
 def _render_info_panel(spec, formula_notes=None):
     """
@@ -799,18 +930,18 @@ def render_single_component(spec, state, apparatus_output_df, key_prefix, result
     """
     Renders one standalone component directly under its own nav entry.
 
-    Input archetype, non-multi-row (the common case - Smoke Detectors
-    etc.) is a thin pass-through: render_component() now owns its own
-    N/A / DTS / PBD status control and collapses itself to one line
-    when N/A, so there's nothing extra to do here.
+    Input archetype (the common case - Smoke Detectors etc., and now
+    every standardized DTS/Manual Override table apparatus too, e.g.
+    Sprinkler Heads) is a thin pass-through: render_component() now
+    owns its own N/A / DTS / PBD status control and collapses itself
+    to one line when N/A, so there's nothing extra to do here.
 
-    Any other standalone archetype (Linked Child / Counter, or a
-    multi-row Input) doesn't have that built-in collapse, so it keeps
-    the older arrow-expand wrapper as a fallback. state =
-    {"expanded": bool, "component": {...}}.
+    Any other standalone archetype (Linked Child / Counter) doesn't
+    have that built-in collapse, so it keeps the older arrow-expand
+    wrapper as a fallback. state = {"expanded": bool, "component": {...}}.
     """
 
-    if spec["kind"] == KIND_INPUT and not spec["multi_row"]:
+    if spec["kind"] == KIND_INPUT:
         return render_component(
             spec, state["component"], apparatus_output_df,
             parent_quantity=get_quantity_by_apparatus(results_so_far or [], spec.get("parent_key")),
@@ -909,85 +1040,42 @@ def _apply_frl_lookup(spec, quantity, product_type_name, frl_reference_df, frl_m
     return quantity * multiplier, detail
 
 
-def _calculate_input_row(spec, determination_label, value, product_type_name, apparatus_output_df,
-                          project_info, results_so_far, warnings, variable_values=None,
-                          frl_reference_df=None, frl_min=None):
+def _calculate_standardized_row(spec, row, apparatus_output_df, warnings, frl_reference_df=None):
+    """
+    Prices one row of the standardized Determination Type / Value /
+    Product Type / Declared Unit(x) table.
 
-    mode_key = MODE_LABEL_TO_KEY.get(determination_label)
+    The quantity priced against the carbon factor is always Declared
+    Unit(x) - never Value. For Case A, Value is only the design
+    parameter (e.g. a coverage area), not a priceable quantity; for
+    Case B/C, Value and Declared Unit(x) are already mirrored to the
+    same number, so it makes no difference which is read - Declared
+    Unit(x) is the one consistent source across every case.
+    """
+    quantity = row.get("Declared Unit")
+    product_type_name = row.get("Product Type")
 
-    if mode_key == "formula":
-
-        variables = dict(project_info)
-        for var_name, project_key in PROJECT_INFO_ALIASES.items():
-            variables.setdefault(var_name, project_info.get(project_key))
-
-        if spec.get("parent_key"):
-            variables["parent_quantity"] = get_quantity_by_apparatus(results_so_far, spec["parent_key"])
-            parent_spacing = get_spacing_area_by_apparatus(results_so_far, spec["parent_key"])
-            variables["parent_spacing_area"] = parent_spacing
-            variables["spacing_area"] = parent_spacing
-
-        variables.update({k: v for k, v in (variable_values or {}).items() if v})
-
-        variables = resolve_default_variables(spec["formula_system"], spec["formula_component"], variables)
-
-        parts = []
-        for param_name in spec["formula_parameters"]:
-            part = evaluate_calc_rules_formula(spec["formula_system"], spec["formula_component"], param_name, variables)
-            if part is None:
-                warnings.append(
-                    f"{spec['label']}: could not evaluate formula parameter '{param_name}' - check required "
-                    f"inputs (Building Area, Storeys, Floor-to-Floor Height, Risers, or the referenced "
-                    f"parent component)."
-                )
-                return None
-            parts.append(part)
-
-        if not parts:
-            return None
-
-        quantity = sum(parts)
-        spacing_area_out = None
-
-    else:
-
-        if not value or value <= 0:
-            return None
-
-        building_area_m2 = project_info.get("building_area")
-        spacing_area_out = None
-
-        if mode_key == "quantity":
-            quantity = value
-
-        elif mode_key == "grid_spacing":
-            if not building_area_m2 or building_area_m2 <= 0:
-                warnings.append(f"{spec['label']}: Building Area must be set to use Grid Spacing.")
-                return None
-            quantity = building_area_m2 / (value ** 2)
-            spacing_area_out = value ** 2
-
-        elif mode_key == "coverage_area":
-            if not building_area_m2 or building_area_m2 <= 0:
-                warnings.append(f"{spec['label']}: Building Area must be set to use Coverage Area.")
-                return None
-            quantity = building_area_m2 / value
-            spacing_area_out = value
-
-        else:
-            return None
+    if quantity is None or (isinstance(quantity, float) and pd.isna(quantity)) or quantity <= 0:
+        return None
 
     if spec.get("frl_lookup"):
+        frl_min = None
+        raw_frl = row.get("Required FRL (min)")
+        if raw_frl is not None and str(raw_frl).strip() and not (isinstance(raw_frl, float) and pd.isna(raw_frl)):
+            try:
+                frl_min = int(float(raw_frl))
+            except (TypeError, ValueError):
+                frl_min = None
         frl_result = _apply_frl_lookup(spec, quantity, product_type_name, frl_reference_df, frl_min, warnings)
         if frl_result is None:
             return None
         carbon_quantity, frl_detail = frl_result
         return _finalize_result(
             spec, quantity, product_type_name, apparatus_output_df, warnings,
-            spacing_area=spacing_area_out, carbon_quantity=carbon_quantity, frl_min=frl_min, frl_detail=frl_detail,
+            carbon_quantity=carbon_quantity, frl_min=frl_min, frl_detail=frl_detail,
         )
 
-    return _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings, spacing_area=spacing_area_out)
+    return _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings)
 
 
 def calculate_component(spec, comp_state, apparatus_output_df, project_info=None, parent_quantity=None, results_so_far=None, warnings=None,
@@ -1043,33 +1131,24 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
         result = _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings)
         return [result] if result else []
 
-    # KIND_INPUT
-    if not spec["multi_row"] and comp_state.get("status", STATUS_NA) == STATUS_NA:
+    # KIND_INPUT (standardized N/A / DTS / Manual Override table -
+    # see _render_standardized_input_component; applies to every
+    # Input component, including FRL-based Wall Assemblies, regardless
+    # of the ui_structure "Allow Multiple Rows" flag)
+
+    if comp_state.get("status", STATUS_NA) == STATUS_NA:
         return []
-    if spec["multi_row"]:
 
-        table = comp_state.get("table")
-        if table is None or table.empty:
-            return []
+    table = comp_state.get("table")
+    if table is None or table.empty:
+        return []
 
-        results = []
-        for _, row in table.iterrows():
-            result = _calculate_input_row(
-                spec, row.get("Determination Type"), row.get("Value"), row.get("Product Type"),
-                apparatus_output_df, project_info, results_so_far, warnings,
-                frl_reference_df=frl_reference_df, frl_min=row.get("Required FRL (min)") if "Required FRL (min)" in table.columns else None,
-            )
-            if result:
-                results.append(result)
-        return results
-
-    result = _calculate_input_row(
-        spec, comp_state.get("determination_type"), comp_state.get("value"), comp_state.get("product_type"),
-        apparatus_output_df, project_info, results_so_far, warnings,
-        variable_values=comp_state.get("variable_values"),
-        frl_reference_df=frl_reference_df, frl_min=comp_state.get("frl_min"),
-    )
-    return [result] if result else []
+    results = []
+    for _, row in table.iterrows():
+        result = _calculate_standardized_row(spec, row, apparatus_output_df, warnings, frl_reference_df=frl_reference_df)
+        if result:
+            results.append(result)
+    return results
 
 
 def calculate_component_group(specs, group_state, apparatus_output_df, project_info=None, results_so_far=None, warnings=None,
@@ -1151,30 +1230,35 @@ def component_group_design_rows(cat_name, specs, group_state):
                 "Hazard Rating": None,
             })
 
-        elif spec["multi_row"]:
-            table = comp_state.get("table")
-            if table is None or table.empty:
+        else:
+            # Standardized table shape - one row per N/A status, or
+            # one row per configured table entry under DTS/Manual
+            # Override. "Value" here is the design parameter (Case A)
+            # or matches "Declared Unit" (Case B/C) - "Declared Unit"
+            # is always the quantity actually priced.
+            status = comp_state.get("status", STATUS_NA)
+            if status == STATUS_NA:
                 rows.append({
-                    "Category": cat_name, "Subcategory": spec["label"], "Status": "Blank",
-                    "Determination Type": None, "Value": None, "Product Type": None, "Hazard Rating": None,
+                    "Category": cat_name, "Subcategory": spec["label"], "Status": STATUS_NA,
+                    "Determination Type": None, "Value": None, "Product Type": None,
+                    "Declared Unit": None, "Hazard Rating": None,
                 })
             else:
-                for _, r in table.iterrows():
+                table = comp_state.get("table")
+                if table is None or table.empty:
                     rows.append({
-                        "Category": cat_name, "Subcategory": spec["label"], "Status": "Configured",
-                        "Determination Type": r.get("Determination Type"),
-                        "Value": r.get("Value"),
-                        "Product Type": r.get("Product Type"),
-                        "Hazard Rating": None,
+                        "Category": cat_name, "Subcategory": spec["label"], "Status": status,
+                        "Determination Type": None, "Value": None, "Product Type": None,
+                        "Declared Unit": None, "Hazard Rating": None,
                     })
-
-        else:
-            rows.append({
-                "Category": cat_name, "Subcategory": spec["label"],
-                "Status": comp_state.get("status", "N/A"),
-                "Determination Type": comp_state.get("determination_type"),
-                "Value": comp_state.get("value"),
-                "Product Type": comp_state.get("product_type"),
-                "Hazard Rating": None,
-            })
+                else:
+                    for _, r in table.iterrows():
+                        rows.append({
+                            "Category": cat_name, "Subcategory": spec["label"], "Status": status,
+                            "Determination Type": r.get("Determination Type"),
+                            "Value": r.get("Value"),
+                            "Declared Unit": r.get("Declared Unit"),
+                            "Product Type": r.get("Product Type"),
+                            "Hazard Rating": None,
+                        })
     return rows
