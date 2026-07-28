@@ -703,10 +703,15 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
         - Value and Declared Unit(x) mirror each other under both
         statuses, and the table stays a normal add/remove-rows table.
 
-    DTS only ever locks the table to a single row (Case A/B) - editing
-    which Product Type or splitting a total across several Product
-    Types with your own judgement calls is what Manual Override is
-    for, not something DTS auto-splits on your behalf.
+    DTS (Case A/B) starts as a single locked, auto-computed row - the
+    correct answer with zero typing. Adding a row (the same "+"
+    control every apparatus's table has) unlocks the whole table,
+    since there's no way to keep one row read-only while another is
+    editable in the same column - at that point splitting the total
+    across several Product Types becomes the engineer's own typing,
+    the same as Manual Override, while the row stays labelled DTS.
+    Deleting back down to one row re-locks it to the auto-computed
+    figure.
     """
 
     dirty = False
@@ -746,7 +751,8 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
             f"'no Formula yet' for now. Raw text: `{spec.get('formula_text')}`"
         )
     is_dts = comp_state["status"] == STATUS_DTS
-    locked = is_dts and case in ("A", "B")
+    single_row = len(comp_state["table"]) <= 1
+    locked = is_dts and case in ("A", "B") and single_row
 
     if case == "A":
         det_options = _case_a_determination_options(spec)
@@ -764,7 +770,11 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
         comp_state["table"] = table
 
     if locked:
-        # DTS, Case A/B: exactly one row, auto-computed, read-only.
+        # DTS, Case A/B, exactly one row so far: auto-computed,
+        # read-only. Adding a row (the "+" control below, same as
+        # every other apparatus's table) unlocks the whole table for
+        # manual splitting across Product Types - see the note on
+        # `locked` above.
         existing = table.iloc[0] if not table.empty else {}
         det_label = existing.get("Determination Type") if existing.get("Determination Type") in det_options else det_options[0]
         product_type = existing.get("Product Type")
@@ -826,17 +836,30 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
 
     edited = st.data_editor(
         comp_state["table"], width='stretch', hide_index=True,
-        num_rows="fixed" if locked else "dynamic", column_config=column_config,
+        num_rows="dynamic", column_config=column_config,
         key=f"{key_prefix}_{spec['key']}_table",
     )
     edited = edited.reset_index(drop=True)
 
+    row_count_changed = len(edited) != len(prev_table)
+
+    synced_something_new = False
     if not locked:
+        before_sync = edited.copy()
         edited = _sync_value_declared_unit(edited, prev_table, case, spec, design_param_name, building_inputs)
+        synced_something_new = not edited.equals(before_sync)
 
     if not edited.equals(comp_state["table"]):
         comp_state["table"] = edited
         dirty = True
+        if synced_something_new or row_count_changed:
+            # Without this, the synced Value/Declared Unit only shows
+            # up after the *next* edit - st.data_editor already told
+            # the browser what to draw for this rerun before the sync
+            # above ran, so the freshly-computed number sits correctly
+            # in comp_state but isn't visible until something forces
+            # another pass. This makes that pass happen immediately.
+            st.rerun()
 
     if case == "C" and is_dts:
         st.caption("No Formula configured yet for this apparatus - DTS is a plain typed figure for now.")
@@ -1078,6 +1101,40 @@ def _calculate_standardized_row(spec, row, apparatus_output_df, warnings, frl_re
     return _finalize_result(spec, quantity, product_type_name, apparatus_output_df, warnings)
 
 
+def _consolidate_by_product_type(results):
+    """
+    Merges result rows that share the same Product Type (and the same
+    Required FRL (min), for Wall Assemblies, since a different FRL is
+    a genuinely different construction, not a duplicate) into one
+    combined line - Quantity and every carbon column summed together.
+
+    This is what makes adding a row about splitting across DIFFERENT
+    Product Types (the actual point of the "+" control), rather than
+    something that also lets the same Product Type appear as two
+    separate near-identical lines if a row gets split for no reason,
+    or if a DTS split (see _render_standardized_input_component)
+    happens to land two rows on the same product. Order of first
+    appearance is preserved.
+    """
+    merged = {}
+    order = []
+
+    for r in results:
+        key = (r["Product Type"], r.get("Required FRL (min)"))
+        if key not in merged:
+            merged[key] = dict(r)
+            order.append(key)
+        else:
+            existing = merged[key]
+            existing["Quantity"] = (existing.get("Quantity") or 0) + (r.get("Quantity") or 0)
+            for field in ("A1-A3", "A4", "A5", "Total"):
+                existing[field] = (existing.get(field) or 0) + (r.get(field) or 0)
+            # SpacingArea/FRL Basis etc. aren't meaningfully summable -
+            # whichever row hit this Product Type first keeps its value.
+
+    return [merged[key] for key in order]
+
+
 def calculate_component(spec, comp_state, apparatus_output_df, project_info=None, parent_quantity=None, results_so_far=None, warnings=None,
                          frl_reference_df=None):
     """
@@ -1148,7 +1205,7 @@ def calculate_component(spec, comp_state, apparatus_output_df, project_info=None
         result = _calculate_standardized_row(spec, row, apparatus_output_df, warnings, frl_reference_df=frl_reference_df)
         if result:
             results.append(result)
-    return results
+    return _consolidate_by_product_type(results)
 
 
 def calculate_component_group(specs, group_state, apparatus_output_df, project_info=None, results_so_far=None, warnings=None,
