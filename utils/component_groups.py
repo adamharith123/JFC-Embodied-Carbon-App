@@ -48,7 +48,7 @@ from utils.formula_engine import (
     solve_formula_for_variable,
     FormulaError,
 )
-from utils.condition_loader import get_condition_value, parameter_condition_key
+from utils.condition_loader import get_condition_value, parameter_condition_keys, parameter_condition_options
 import math
 
 
@@ -91,20 +91,25 @@ BUILDING_INPUT_ALIASES = {
     "number_of_storey": "building_storeys",
     "floor_area_per_storey": "floor_area_per_storey",  # spelled the same in both places
     "effective_height": "building_effective_height",
-    "fire_stairs_per_stoery": "building_fire_stairs",  # sic - matches ui_structure's spelling
+    "fire_stairs_per_stoery": "building_fire_stairs",  # sic - matches ui_structure's current spelling
+    "fire_stairs_per_storey": "building_fire_stairs",  # accepted too, in case/when that typo gets fixed
     "room_number": "building_rooms",
     "floor_to_floor_height": "building_floor_to_floor_height",
     "exits_per_storey": "building_exits_per_storey",
-    # Not a Formula-column variable - this is the Condition sheet's
-    # "Condition key" value for sprinkler_coverage_area today. Kept
-    # here as a synonym purely so a Condition-sheet lookup resolves to
-    # the same Building Input as "sprinkler_hazard_classification"
-    # would. Fragile: if the Condition sheet ever adds a second
-    # differently-spelled key for the same Building Input, or the
-    # naming changes, this needs updating by hand - flagged to the
-    # team as worth standardizing on one literal name instead.
-    "fire_hazard": "sprinkler_hazard_classification",
-    "sprinkler_hazard_classification": "sprinkler_hazard_classification",
+}
+
+# Condition-sheet "Condition Key" names (NOT Formula-column variables -
+# a condition key never appears as a bare variable inside a Formula,
+# it only ever shows up as a Condition sheet column value) that
+# resolve to a Building Input, mapped to the project_info key holding
+# the engineer's current choice. "fire_hazard" now matches the
+# Building Input's own internal key directly (renamed from "Sprinkler
+# Hazard Classification"/sprinkler_hazard_classification - it's shared
+# by Sprinklers and Extinguishers, not sprinkler-specific), so this
+# needs no alias/patch, just a straight passthrough - see
+# _resolve_condition_key_value.
+CONDITION_KEY_ALIASES = {
+    "fire_hazard": "fire_hazard",
 }
 
 # ==========================================================
@@ -253,8 +258,17 @@ def get_spacing_area_by_apparatus(results, apparatus_label):
 # State Initialization
 # ==========================================================
 
-def _empty_multi_row_table(include_frl=False):
+def _condition_key_label(key):
+    """Human-friendly column header for an extra per-row condition
+    selector, e.g. "automatic_fixed_suppression" -> "Automatic Fixed
+    Suppression"."""
+    return key.replace("_", " ").title()
+
+
+def _empty_multi_row_table(include_frl=False, extra_keys=None):
     columns = ["Determination Type", "Value", "Product Type", "Declared Unit"]
+    for key in (extra_keys or []):
+        columns.append(_condition_key_label(key))
     if include_frl:
         columns.append("Required FRL (min)")
     return pd.DataFrame(columns=columns)
@@ -271,9 +285,11 @@ def init_component_state(spec):
         # component (regardless of the ui_structure "Allow Multiple
         # Rows" flag), including FRL-based Wall Assemblies, uses this
         # same table shape. See _render_standardized_input_component.
+        case, design_param_name, _malformed = _classify_input_case(spec)
+        extra_keys = _design_parameter_extra_keys(design_param_name) if case == "A" else []
         return {
             "status": STATUS_NA,
-            "table": _empty_multi_row_table(include_frl=spec.get("frl_lookup", False)),
+            "table": _empty_multi_row_table(include_frl=spec.get("frl_lookup", False), extra_keys=extra_keys),
         }
 
     if kind == KIND_LINKED_CHILD:
@@ -361,24 +377,52 @@ def _resolve_building_inputs(project_info):
     return {k: v for k, v in variables.items() if v is not None}
 
 
-def _resolve_design_parameter(design_param_name, project_info):
+def _design_parameter_extra_keys(design_param_name):
+    """
+    Which of this design parameter's Condition-sheet keys AREN'T a
+    Building Input (see CONDITION_KEY_ALIASES) - these need their own
+    per-row selector column in the table (like Required FRL (min) for
+    Wall Assemblies), because there's no single project-wide value to
+    resolve them from automatically. For sprinkler_coverage_area this
+    is [] (fire_hazard is a Building Input). For
+    extinguisher_coverage_area it's
+    ["automatic_fixed_suppression", "minimum_rating_and_classification_of_extinguisher"].
+    """
+    return [k for k in parameter_condition_keys(design_param_name) if k not in CONDITION_KEY_ALIASES]
+
+
+def _resolve_design_parameter(design_param_name, project_info, extra_conditions=None):
     """
     Resolves a Case A apparatus's design parameter from the Condition
-    sheet - unconditioned if it only has a "default" row, otherwise
-    keyed off whichever Building Input the Condition sheet says it
-    depends on (e.g. Sprinkler Hazard Classification), read straight
-    from the already-set project_info value - never a second selector
-    rendered here, since that Building Input is already a single,
-    shared, project-level field the engineer sets once.
+    sheet, against however many of its condition keys can currently be
+    determined:
 
-    Returns (value, note_or_None).
+      - Keys that map to a Building Input (CONDITION_KEY_ALIASES, e.g.
+        fire_hazard) are read straight from the already-set
+        project_info value - never a second selector rendered for
+        these, since it's a single, shared, project-level field the
+        engineer sets once.
+      - Any other keys (e.g. extinguisher_coverage_area's suppression
+        status and Minimum Rating and Classification) are genuine
+        per-row choices - the caller supplies them via
+        extra_conditions ({condition_key: value}), read from that
+        row's own selector columns (see
+        _render_standardized_input_component).
+
+    Returns (value, note_or_None) - None until every one of the
+    parameter's condition keys is resolved (a Building Input not set
+    yet, or a row's selector not chosen yet), same as always.
     """
-    condition_key = parameter_condition_key(design_param_name)
-    condition_value = None
-    if condition_key:
-        project_key = BUILDING_INPUT_ALIASES.get(condition_key, condition_key)
-        condition_value = (project_info or {}).get(project_key)
-    return get_condition_value(design_param_name, condition_key, condition_value)
+    conditions = {}
+    for key in parameter_condition_keys(design_param_name):
+        if key in CONDITION_KEY_ALIASES:
+            project_key = CONDITION_KEY_ALIASES[key]
+            value = (project_info or {}).get(project_key)
+        else:
+            value = (extra_conditions or {}).get(key)
+        if value:
+            conditions[key] = value
+    return get_condition_value(design_param_name, conditions)
 
 
 def _value_to_design_param(determination_label, value):
@@ -750,6 +794,9 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
             f"⚠️ This apparatus's Formula in ui_structure couldn't be parsed - treating it as "
             f"'no Formula yet' for now. Raw text: `{spec.get('formula_text')}`"
         )
+    extra_keys = _design_parameter_extra_keys(design_param_name) if case == "A" else []
+    extra_labels = {key: _condition_key_label(key) for key in extra_keys}
+
     is_dts = comp_state["status"] == STATUS_DTS
     single_row = len(comp_state["table"]) <= 1
     locked = is_dts and case in ("A", "B") and single_row
@@ -778,9 +825,10 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
         existing = table.iloc[0] if not table.empty else {}
         det_label = existing.get("Determination Type") if existing.get("Determination Type") in det_options else det_options[0]
         product_type = existing.get("Product Type")
+        extra_selections = {key: existing.get(extra_labels[key]) for key in extra_keys}
 
         if case == "A":
-            design_value, source_note = _resolve_design_parameter(design_param_name, project_info)
+            design_value, source_note = _resolve_design_parameter(design_param_name, project_info, extra_selections)
             value_display = _design_param_to_value(det_label, design_value)
             variables = dict(building_inputs)
             if design_value is not None:
@@ -793,16 +841,23 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
 
         row = {"Determination Type": det_label, "Value": value_display, "Product Type": product_type,
                "Declared Unit": declared_unit}
+        for key in extra_keys:
+            row[extra_labels[key]] = extra_selections.get(key)
         if spec.get("frl_lookup") and "Required FRL (min)" in table.columns:
             row["Required FRL (min)"] = existing.get("Required FRL (min)")
         table = pd.DataFrame([row], columns=table.columns)
         comp_state["table"] = table
 
         if declared_unit is None:
+            missing_bits = []
+            if case == "A":
+                missing_bits.append("the Condition sheet entry for this apparatus")
+            if extra_keys:
+                missing_bits.append(f"the {', '.join(extra_labels.values())} selection{'s' if len(extra_keys) > 1 else ''} below")
             st.caption(
-                "⏳ Not yet computed - fill in the Additional Building Inputs "
-                + ("and the Condition sheet entry for this apparatus " if case == "A" else "")
-                + "for this to auto-fill."
+                "⏳ Not yet computed - fill in the Additional Building Inputs"
+                + (", " + " and ".join(missing_bits) if missing_bits else "")
+                + " for this to auto-fill."
             )
         elif source_note:
             st.caption(f"DTS source: {source_note}")
@@ -822,6 +877,18 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
             f"Declared Unit ({spec.get('quantity_unit', 'units')})", min_value=0.0, required=False, disabled=locked,
         ),
     }
+
+    for key in extra_keys:
+        options = parameter_condition_options(design_param_name, key)
+        column_config[extra_labels[key]] = st.column_config.SelectboxColumn(
+            extra_labels[key],
+            options=options if options else ["No options found"],
+            required=False,
+            # Never locked, even under DTS - this is a genuine per-row
+            # choice (e.g. which AS 2444 rating to specify), not
+            # something DTS can auto-decide the way it can for a
+            # single-valued design parameter like a coverage area.
+        )
 
     show_frl = bool(spec.get("frl_lookup"))
     if show_frl:
@@ -868,6 +935,11 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
             "Grid Spacing and Coverage Area are the same design parameter, just entered in a different unit."
             + (" Type either Value or Declared Unit - the other back-solves." if not locked else "")
         )
+        if extra_keys:
+            st.caption(
+                f"{', '.join(extra_labels.values())} determine{'s' if len(extra_keys) == 1 else ''} the figure used "
+                + ("automatically." if locked else "when DTS-locked to a single row; edited freely here, they're reference-only and don't recompute Value/Declared Unit.")
+            )
     elif case == "B" and not locked:
         st.caption("This apparatus has no separate design parameter - Value and Declared Unit always match.")
 

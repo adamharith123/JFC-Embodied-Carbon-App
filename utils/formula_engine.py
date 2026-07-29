@@ -93,7 +93,10 @@ def _parse(formula_text):
     text = str(formula_text).strip()
     if text.upper().startswith("FORMULA:"):
         text = text[len("FORMULA:"):].strip()
-    tree = ast.parse(text, mode="eval")
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError as e:
+        raise FormulaError(f"Formula text isn't valid syntax: {e}")
     for node in ast.walk(tree):
         if not isinstance(node, _ALLOWED_NODES):
             raise FormulaError(f"Disallowed syntax in formula: {type(node).__name__}")
