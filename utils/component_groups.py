@@ -665,27 +665,35 @@ def _sync_value_declared_unit(edited, prev_table, case, spec, design_param_name,
       - Case A: whichever column the engineer just typed into drives
         the other, through the real Formula (Declared Unit(x) ->
         Value back-solves numerically via
-        formula_engine.solve_formula_for_variable).
+        formula_engine.solve_formula_for_variable). Switching
+        Determination Type alone (Grid Spacing <-> Coverage Area, with
+        neither Value nor Declared Unit(x) touched) converts the
+        existing Value to the new unit instead of leaving the raw
+        number in place misinterpreted under the new unit - Declared
+        Unit(x) is untouched, since a unit switch doesn't change the
+        underlying design parameter, only how it's displayed/entered.
       - Case B/C: no design parameter to solve for - the two columns
         are a plain 1:1 mirror of each other.
 
-    If both columns changed at once on the same row (e.g. a paste, or
-    a brand-new row where neither has a previous value to diff
-    against), Value is treated as the one that drives Declared Unit(x).
-    Mutates and returns `edited`.
+    If both Value and Declared Unit(x) changed at once on the same row
+    (e.g. a paste, or a brand-new row where neither has a previous
+    value to diff against), Value is treated as the one that drives
+    Declared Unit(x). Mutates and returns `edited`.
     """
     for i in edited.index:
         det_label = edited.at[i, "Determination Type"]
         value = edited.at[i, "Value"]
         declared = edited.at[i, "Declared Unit"]
 
-        prev_value = prev_declared = None
+        prev_value = prev_declared = prev_det_label = None
         if prev_table is not None and i in prev_table.index:
             prev_value = prev_table.at[i, "Value"]
             prev_declared = prev_table.at[i, "Declared Unit"]
+            prev_det_label = prev_table.at[i, "Determination Type"]
 
         value_changed = not _approx_equal(value, prev_value)
         declared_changed = not _approx_equal(declared, prev_declared)
+        det_label_changed = prev_det_label is not None and det_label != prev_det_label
 
         if _blank(value) and _blank(declared):
             continue
@@ -698,6 +706,17 @@ def _sync_value_declared_unit(edited, prev_table, case, spec, design_param_name,
             continue
 
         # Case A - real back-solve through the Formula.
+
+        if det_label_changed and not value_changed and not declared_changed:
+            # Pure unit switch, nothing typed - convert Value from the
+            # OLD unit's meaning to the NEW one (e.g. a Coverage Area
+            # of 104.04 becomes a Grid Spacing of ~10.2, not a Grid
+            # Spacing of 104.04). Declared Unit(x) doesn't change.
+            design_param = _value_to_design_param(prev_det_label, value)
+            if design_param is not None:
+                edited.at[i, "Value"] = _design_param_to_value(det_label, design_param)
+            continue
+
         if declared_changed and not value_changed and not _blank(declared):
             solved = solve_formula_for_variable(
                 spec["formula_text"], building_inputs, design_param_name, float(declared),
@@ -910,6 +929,12 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
 
     row_count_changed = len(edited) != len(prev_table)
 
+    det_type_changed_while_locked = False
+    if locked and not edited.empty and not prev_table.empty:
+        det_type_changed_while_locked = (
+            edited.at[0, "Determination Type"] != prev_table.at[0, "Determination Type"]
+        )
+
     synced_something_new = False
     if not locked:
         before_sync = edited.copy()
@@ -919,13 +944,20 @@ def _render_standardized_input_component(spec, comp_state, apparatus_output_df, 
     if not edited.equals(comp_state["table"]):
         comp_state["table"] = edited
         dirty = True
-        if synced_something_new or row_count_changed:
+        if synced_something_new or row_count_changed or det_type_changed_while_locked:
             # Without this, the synced Value/Declared Unit only shows
             # up after the *next* edit - st.data_editor already told
             # the browser what to draw for this rerun before the sync
             # above ran, so the freshly-computed number sits correctly
             # in comp_state but isn't visible until something forces
             # another pass. This makes that pass happen immediately.
+            # Same reasoning applies to switching Determination Type
+            # while locked (e.g. Coverage Area -> Grid Spacing) - the
+            # locked branch above recomputed Value from the STALE
+            # Determination Type this rerun (it read the row before
+            # data_editor returned the user's just-made switch), so
+            # without forcing another pass, Value would look like it
+            # ignores which one you picked until your next click.
             st.rerun()
 
     if case == "C" and is_dts:
