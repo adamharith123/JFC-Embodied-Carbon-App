@@ -8,7 +8,6 @@ import streamlit as st
 from utils.constants import (
     CARBON_DATABASE_FILE,
     STANDARDS_DATABASE_FILE,
-    USER_INPUT_DATABASE_FILE,
 )
 
 # ==========================================================
@@ -215,43 +214,6 @@ def load_standards_database(_mtime=None):
     }
 
 # ==========================================================
-# User Input Database
-# ==========================================================
-
-def load_user_input_database():
-    """
-    Load the engineering user input database.
-    """
-
-    return {
-
-        "path": USER_INPUT_DATABASE_FILE,
-
-        "exists": workbook_exists(
-            USER_INPUT_DATABASE_FILE
-        ),
-
-        "sheets": get_workbook_sheet_names(
-            USER_INPUT_DATABASE_FILE
-        ),
-
-        "database": load_sheet(
-            USER_INPUT_DATABASE_FILE,
-            "Database",
-        ),
-
-        # The supplied workbook uses the worksheet name "Input".
-        # Keep the legacy "User Inputs" fallback for older branches.
-        "user_inputs": (
-            load_sheet(USER_INPUT_DATABASE_FILE, "Input")
-            if "Input" in get_workbook_sheet_names(USER_INPUT_DATABASE_FILE)
-            else load_sheet(USER_INPUT_DATABASE_FILE, "User Inputs")
-        ),
-
-    }
-
-
-# ==========================================================
 # Application Loader
 # ==========================================================
 
@@ -262,8 +224,6 @@ def load_all_databases():
         "carbon": load_carbon_database(_mtime=_file_mtime(CARBON_DATABASE_FILE)),
 
         "standards": load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE)),
-
-        "user_input": load_user_input_database(),
 
     }
 
