@@ -1,108 +1,76 @@
-# Fire Embodied Carbon App (FECA)
+# Fire Embodied Carbon App — Folder Guide
 
-Developed by Jacaranda Flame Consulting (JFC), in collaboration with ARUP.
-Status: **Release Candidate**.
+This document explains how the app's folder is organised, so that
+when it's shared as a zipped package, it's clear what each part does
+and where to look for what you need. It's meant as an orientation
+guide rather than a technical manual — for methodology and detailed
+usage instructions, see the **Help** page inside the running app.
 
-Estimates the **upfront embodied carbon (A1–A5)** of fire safety systems
-in buildings — from project setup through to a PDF report.
+## Top-level files
 
-## What it does
+- **`Home.py`** — the app's entry point. This is the file that gets
+  run to launch the app; you shouldn't need to open it directly.
+- **`requirements.txt`** — the list of software packages the app
+  depends on, used to set up the environment it runs in.
 
-1. **Project & Building Setup** — project details and NCC building class.
-2. **System Identification** — ten fire safety categories (Detection,
-   Warning, Egress, First Aid Fire-Fighting, Structural Fire Protection,
-   Suppression, Smoke Hazard Management, Fire Brigade Access, Fire
-   Safety Management, Special Hazards).
-3. **Compliance Pathway** — each system marked Not Applicable,
-   Deemed-to-Satisfy (DtS), or Manual Override.
-4. **Quantity Determination** — from user input, standards-based rules
-   (e.g. detector/sprinkler spacing), or system-specific calculators.
-5. **Product & Emission Factor Matching** — matched to manufacturer
-   EPDs where available, Australian industry-average data otherwise,
-   or mass-based estimates as a last resort.
-6. **Calculation & Reporting** — carbon by lifecycle stage (A1–A3, A4,
-   A5), shown via tables/charts and exportable as a PDF. Assessments
-   save as versions for comparing design iterations.
+## `pages/` — the app's screens
 
-Scope is upfront embodied carbon only — no operational or
-end-of-life stages. The full methodology, workflow and references are
-also built into the app's **Help** page.
+Each file here is one screen of the app, in the order they appear in
+the sidebar:
 
-### Pages
-| Page | Purpose |
-|---|---|
-| Home | Landing page, launches a new assessment |
-| Fire Design | The main assessment workflow (steps 1–6 above) |
-| Compare Results | Side-by-side comparison of two saved versions |
-| Help | Methodology, version management, database management |
+- **Fire Design** — the main assessment workflow: project setup,
+  system identification, compliance pathway, quantities, and
+  emission-factor matching.
+- **Compare Results** — side-by-side comparison of two saved
+  assessment versions.
+- **Help** — methodology notes, version management, and database
+  management tools.
 
-## Running the app
+## `components/`
 
-Requires Python 3.11 via Conda, with packages from `requirements.txt`
-(Streamlit, pandas, openpyxl, plotly, xlsxwriter, reportlab, kaleido,
-qrcode).
+Reusable pieces of the interface (tables, charts, form sections) that
+get shared across the different screens above, rather than being
+built from scratch each time.
 
-- **macOS:** double-click `run_app.command` — sets up/activates the
-  `JFC-Embodied-Carbon-App` Conda environment, syncs dependencies, and
-  launches at `http://localhost:8501` (also reachable from other
-  devices on the same Wi-Fi via the QR code on the Home page). Stop
-  with `stop_app.command`.
-- **Windows:** double-click `run_app.bat` / `stop_app.bat` (same
-  behaviour).
-- **Manual, once the environment exists:**
-  ```bash
-  streamlit run Home.py --server.address=0.0.0.0 --server.port=8501
-  ```
+## `utils/`
 
-## Folder structure
+The app's internal engine — calculations, report generation,
+standards lookups, and database reading/writing logic. This folder is
+what actually powers everything the screens display. It's not meant
+to be opened or edited directly.
 
-```
-Home.py            Entry point
-pages/              Fire Design, Compare Results, Help
-components/         Reusable UI building blocks
-utils/              Calculations, database loading, report generation,
-                    standards lookups, session state
-database/
-  databases/          Live databases the app reads at runtime
-  defaults/           Factory-default copies, for "Revert to Default"
-data/
-  project_store.db    Saved projects/versions (SQLite)
-assets/             Logos
-```
+## `database/` — the editable engineering databases
 
-## The engineering databases
+This is the folder most relevant to keeping the app's data current.
+It contains three workbooks, split across two subfolders:
 
-Read at runtime from `database/databases/`:
+- **`databases/`** — the live files the app reads from at runtime:
+  - `EC_Database.xlsx` — apparatus-level embodied carbon factors.
+  - `Building_Class.xlsx` — NCC building classes and which standards
+    apply to each.
+  - `Standards_Calc_Database_Finalised.xlsx` — drives the on-screen
+    questions and the standards-based quantity calculations.
+- **`defaults/`** — permanent factory-default copies of the same
+  three files, kept as a safety net. If a live file is edited or
+  replaced and something goes wrong, the Help page's "Revert to
+  Default" option restores from here.
 
-| File | Role |
-|---|---|
-| `ARUP_v2_Finalised.xlsx` | Carbon Database — apparatus-level embodied carbon factors |
-| `standards_database_master.xlsx` | Building Class Database — NCC building classes and applicable standards |
-| `Standards_Calc_Database_Finalised.xlsx` | UI & Calculation Database — drives the on-screen questions and standards-based calculations |
+These files can be downloaded, edited, and re-uploaded from the Help
+page's **Manage Database** section — uploads are checked against the
+required structure before being accepted, so a malformed file can't
+break the app.
 
-Manage these from the Help page → **Manage Database**: download the
-current copy to edit offline, upload a replacement (validated against
-required sheets/columns before it's accepted), or revert to the
-factory default at any time.
+## `data/`
 
-## Known limitations
+Holds `project_store.db`, where saved projects and assessment
+versions are stored locally. This is what lets you return to a
+project later or compare versions.
 
-- **Local, single-user tool** — runs per machine, not a hosted
-  multi-user web app. Project data lives in the local
-  `data/project_store.db` and isn't centrally backed up or shared
-  between machines.
-- **Data quality hierarchy** — emission factors fall back from
-  manufacturer EPD → industry-average → mass-based estimate depending
-  on what's available for a given product; worth keeping in mind when
-  reviewing results.
+## `assets/`
 
-## Source control
+Logos and images used throughout the app's interface.
 
-Version-controlled on GitHub
-(`adamharith123/JFC-Embodied-Carbon-App`). Happy to arrange access or
-a repository transfer as part of handover.
+---
 
-## Contact
-
-For questions on methodology, the databases, or the codebase, please
-reach out to the JFC team directly.
+For questions on methodology, the databases, or the codebase, 
+please do not hesitate to reach out to the JFC team directly.
