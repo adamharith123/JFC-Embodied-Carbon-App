@@ -17,8 +17,8 @@ DEFAULT_DATABASE_DIR = ROOT_DIR / "database" / "defaults"
 EXPORT_DIR = ROOT_DIR / "exports"
 REPORT_DIR = ROOT_DIR / "reports"
 
-CARBON_DATABASE_FILE = DATABASE_DIR / "ARUP_v2_Finalised.xlsx"
-STANDARDS_DATABASE_FILE = DATABASE_DIR / "standards_database_master.xlsx"
+CARBON_DATABASE_FILE = DATABASE_DIR / "EC_Database.xlsx"
+STANDARDS_DATABASE_FILE = DATABASE_DIR / "Building_Class.xlsx"
 CALC_RULES_DATABASE_FILE = DATABASE_DIR / "Standards_Calc_Database_Finalised.xlsx"
 # COMPONENT_DATABASE_FILE = DATABASE_DIR / "component_database_master.xlsx"
 

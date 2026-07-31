@@ -201,11 +201,6 @@ def load_standards_database(_mtime=None):
             STANDARDS_DATABASE_FILE
         ),
 
-        "standards_list": load_sheet(
-            STANDARDS_DATABASE_FILE,
-            "Standards List",
-        ),
-
         "building_class": load_sheet(
             STANDARDS_DATABASE_FILE,
             "Building Class",
@@ -261,7 +256,7 @@ def database_status_summary():
             "sheets": db["standards"]["sheets"],
 
             "rows": len(
-                db["standards"]["standards_list"]
+                db["standards"]["building_class"]
             ),
 
         },
@@ -298,13 +293,6 @@ def get_building_classes():
     ]
 
     return classes.drop_duplicates().tolist()
-
-def get_standards_list():
-    """
-    Return the Standards List worksheet.
-    """
-
-    return load_standards_database(_mtime=_file_mtime(STANDARDS_DATABASE_FILE))["standards_list"]
 
 def get_building_class_applicability(building_class):
     """

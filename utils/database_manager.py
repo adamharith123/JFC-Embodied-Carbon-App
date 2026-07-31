@@ -46,8 +46,8 @@ from utils.constants import (
 def _norm(name):
     """
     Normalise a column/sheet name for comparison - strips whitespace
-    and non-breaking spaces (the Standards List / Building Class
-    sheets use \xa0 in some of their headers).
+    and non-breaking spaces (the Building Class sheet uses \xa0 in
+    some of its headers).
     """
     return str(name).replace("\xa0", "").strip().casefold()
 
@@ -62,7 +62,7 @@ def _norm(name):
 
 DATABASE_REGISTRY = {
     "carbon": {
-        "label": "Carbon Database (ARUP_v2_Finalised.xlsx)",
+        "label": "Carbon Database (EC_Database.xlsx)",
         "live_path": CARBON_DATABASE_FILE,
         "default_path": DEFAULT_DATABASE_DIR / CARBON_DATABASE_FILE.name,
         "sheets": {
@@ -79,14 +79,13 @@ DATABASE_REGISTRY = {
         },
     },
     "standards": {
-        "label": "Building Class Database (standards_database_master.xlsx)",
+        "label": "Building Class Database (Building_Class.xlsx)",
         "live_path": STANDARDS_DATABASE_FILE,
         "default_path": DEFAULT_DATABASE_DIR / STANDARDS_DATABASE_FILE.name,
         "sheets": {
-            # Neither sheet's columns are read by name anywhere in the
-            # app (both are accessed generically, e.g. "first column"),
-            # so only sheet presence is required here.
-            "Standards List": (0, []),
+            # This sheet's columns aren't read by name anywhere in the
+            # app (accessed generically, e.g. "first column"), so only
+            # sheet presence is required here.
             "Building Class": (0, []),
         },
     },
